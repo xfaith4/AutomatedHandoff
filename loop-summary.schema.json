@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AgentLoopRunSummary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["headline", "status", "objective", "accomplished", "verification", "issues", "decisions",
+    "changedFiles", "commits", "openItems", "needsOwner", "nextAction", "loopHealth"],
+  "properties": {
+    "headline": { "type": "string", "description": "One sentence, at most 30 words: the outcome and its consequence." },
+    "status": { "type": "string", "enum": ["completed", "partial", "blocked", "failed"] },
+    "objective": { "type": "string", "description": "What the run set out to do, from the handoff it started on." },
+    "accomplished": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["title", "detail", "files"],
+        "properties": {
+          "title": { "type": "string" },
+          "detail": { "type": "string" },
+          "files": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["check", "result", "detail"],
+        "properties": {
+          "check": { "type": "string", "description": "The command or method, such as a pytest suite or an offline replay." },
+          "result": { "type": "string", "enum": ["pass", "fail", "not-run", "claimed"] },
+          "detail": { "type": "string", "description": "The counts or the observed output." }
+        }
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["kind", "severity", "title", "detail", "location", "status"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["bug-found", "bug-fixed", "error", "tooling", "risk", "limitation"] },
+          "severity": { "type": "string", "enum": ["high", "medium", "low"] },
+          "title": { "type": "string" },
+          "detail": { "type": "string" },
+          "location": { "type": "string", "description": "A file, symbol or session, or an empty string." },
+          "status": { "type": "string", "enum": ["open", "fixed", "worked-around", "deferred"] }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["decision", "rationale"],
+        "properties": { "decision": { "type": "string" }, "rationale": { "type": "string" } }
+      }
+    },
+    "changedFiles": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["path", "change"],
+        "properties": { "path": { "type": "string" }, "change": { "type": "string" } }
+      }
+    },
+    "commits": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["sha", "subject"],
+        "properties": { "sha": { "type": "string" }, "subject": { "type": "string" } }
+      }
+    },
+    "openItems": { "type": "array", "items": { "type": "string" } },
+    "needsOwner": { "type": "array", "items": { "type": "string" } },
+    "nextAction": { "type": "string" },
+    "loopHealth": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rotations", "toolErrors", "denials", "notes"],
+      "properties": {
+        "rotations": { "type": "integer" },
+        "toolErrors": { "type": "integer" },
+        "denials": { "type": "integer" },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}

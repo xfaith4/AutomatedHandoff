@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/context-guard.ps1\" -Event PostToolUse" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/context-guard.ps1\" -Event Stop" }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "clear",
+        "hooks": [
+          { "type": "command", "command": "pwsh -NoProfile -Command \"Get-Content -Raw \\\"$env:CLAUDE_PROJECT_DIR/current-handoff.md\\\"\"" }
+        ]
+      }
+    ]
+  }
+}

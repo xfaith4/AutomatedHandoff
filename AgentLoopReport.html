@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Loop Report</title>
+<!-- New-AgentLoopReport.ps1 fills this tag with the JSONL log; left empty, use Open log or drop a file -->
+<script id="log-data" type="application/x-ndjson"></script>
+<style>
+  :root {
+    --bg: #f5f6f8; --surface: #ffffff; --surface-2: #eef0f3; --border: #dadee4;
+    --text: #1b1f24; --muted: #5c6570; --accent: #2b67d1;
+    --ok: #1d7f46; --ok-bg: #e2f3e8; --bad: #b9342a; --bad-bg: #fae5e2;
+    --info: #2b67d1; --info-bg: #e3ecfb; --warn: #8a5f00; --warn-bg: #f8eed3;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121417; --surface: #1a1d21; --surface-2: #23272d; --border: #30353c;
+      --text: #e6e8eb; --muted: #9aa3ad; --accent: #6d9cf0;
+      --ok: #5cc98a; --ok-bg: #173323; --bad: #f08074; --bad-bg: #3a1c19;
+      --info: #7ea8f2; --info-bg: #1b2a44; --warn: #e2b54e; --warn-bg: #352a12;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  h4 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .muted { color: var(--muted); }
+  #source { margin: 4px 0 0; font-size: 13px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button, select, .btn { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button:hover, .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .kpi .label { font-size: 12px; color: var(--muted); }
+  .kpi .value { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .kpi .sub { font-size: 12px; color: var(--muted); }
+  .kpi.bad .value { color: var(--bad); }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { font-size: 12px; font-weight: 600; color: var(--muted); background: var(--surface-2); position: sticky; top: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.run td { background: var(--surface-2); font-size: 13px; white-space: normal; }
+  tr.sess { cursor: pointer; }
+  tr.sess:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  td.chev { width: 24px; color: var(--muted); transition: transform .15s; }
+  tr.sess.open td.chev { transform: rotate(90deg); }
+  tr.detail td { white-space: normal; padding: 4px 16px 16px; background: var(--surface); }
+
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .badge.ok { color: var(--ok); background: var(--ok-bg); }
+  .badge.bad { color: var(--bad); background: var(--bad-bg); }
+  .badge.info { color: var(--info); background: var(--info-bg); }
+  .badge.warn { color: var(--warn); background: var(--warn-bg); }
+
+  dl.meta { display: grid; grid-template-columns: max-content 1fr; gap: 2px 16px; margin: 12px 0 0; font-size: 13px; }
+  dl.meta dt { color: var(--muted); }
+  dl.meta dd { margin: 0; word-break: break-all; }
+  .denials ul { margin: 0; padding-left: 18px; }
+  .denials li { color: var(--bad); word-break: break-word; }
+  code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12px; }
+  .msg { border-left: 3px solid var(--border); padding: 2px 0 2px 12px; margin: 8px 0; }
+  .msg time { font-size: 12px; color: var(--muted); }
+  .msg pre { margin: 2px 0 0; white-space: pre-wrap; word-break: break-word;
+    font: 13px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; }
+
+  #empty { border: 2px dashed var(--border); border-radius: 10px; padding: 48px 16px; text-align: center; background: var(--surface); }
+  #empty p { margin: 6px 0; }
+  body.dragging #empty, body.dragging .card { border-color: var(--accent); }
+  .notice { color: var(--warn); }
+
+  h2 { font-size: 16px; margin: 28px 0 10px; }
+  .handoff { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .handoff:last-child { border-bottom: 0; }
+  .handoff h3 { font-size: 14px; margin: 0; }
+  .handoff time { font-size: 12px; color: var(--muted); }
+  .handoff dl.meta { margin-top: 8px; }
+  .handoff dl.meta dd { word-break: break-word; }
+  .card > .muted { padding: 12px 16px; margin: 0; }
+
+  /* Run summary (Invoke-LoopSummary.ps1 writes a type:"summary" line per run) */
+  .summary { padding: 16px 18px; margin-bottom: 16px; }
+  .summary + .summary { margin-top: -4px; }
+  .summary h3 { font-size: 16px; margin: 0 0 4px; line-height: 1.35; }
+  .summary .sub { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
+  .summary p { margin: 4px 0; }
+  .summary ul { margin: 4px 0; padding-left: 20px; }
+  .summary li { margin: 3px 0; }
+  .summary table { margin: 4px 0 8px; }
+  .summary td, .summary th { white-space: normal; vertical-align: top; position: static; }
+  .summary td.tight { white-space: nowrap; }
+  .summary .files code { margin-right: 6px; }
+  .summary .owner { border-left: 3px solid var(--warn); background: var(--warn-bg); padding: 6px 12px; border-radius: 4px; }
+  .summary .owner h4 { margin-top: 2px; color: var(--warn); }
+  .summary .next { border-left: 3px solid var(--accent); background: var(--info-bg); padding: 6px 12px; border-radius: 4px; margin-top: 12px; }
+  .summary .next h4 { margin-top: 2px; color: var(--info); }
+  .summary.err { color: var(--warn); }
+
+  @media print {
+    .controls, td.chev { display: none; }
+    body { background: #fff; }
+    .card { overflow: visible; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Agent Loop Report</h1>
+      <p id="source" class="muted">No log loaded</p>
+    </div>
+    <div class="controls">
+      <select id="run" aria-label="Filter by run" hidden></select>
+      <button id="expand" type="button" hidden>Expand all</button>
+      <label class="btn primary" for="file">Open log…</label>
+      <input id="file" type="file" accept=".jsonl,.json,.log,.txt" hidden>
+    </div>
+  </header>
+
+  <section id="empty">
+    <p><strong>Open an agent-loop log or a handoff log, or drop it on this page.</strong></p>
+    <p class="muted">Start-AgentLoop.ps1 writes <code>&lt;repo&gt;/.claude/state/agent-loop.log.jsonl</code>;
+      Add-RunHandoffEntry.ps1 writes <code>handoff-log.json</code> next to the handoff file.</p>
+  </section>
+
+  <section id="report" hidden>
+    <div class="kpis" id="kpis"></div>
+    <div id="summaries"></div>
+    <div class="card">
+      <table id="sessions">
+        <thead>
+          <tr>
+            <th class="num">#</th><th>Started</th><th class="num">Duration</th><th>Outcome</th><th>Result</th>
+            <th class="num">Turns</th><th class="num">Cost</th><th class="num">Denials</th><th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="handoffs" hidden>
+    <h2>Handoff entries</h2>
+    <div class="card" id="handoff-list"></div>
+  </section>
+</main>
+
+<script>
+  const $ = s => document.querySelector(s);
+  const el = (tag, attrs = {}, ...kids) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'class') n.className = v;
+      else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+      else n.setAttribute(k, v);
+    }
+    for (const k of kids.flat(Infinity)) if (k != null && k !== '') n.append(k instanceof Node ? k : String(k));
+    return n;
+  };
+  const COLS = 9;
+  const OUTCOME_TONE = { rotated: 'info', finished: 'ok', done: 'ok', failed: 'bad', incomplete: 'warn',
+    blocked: 'warn', stalled: 'warn', 'rate-limited': 'warn' };
+  const state = { runs: [], handoffs: [], entries: 0, skipped: 0, source: '' };
+
+  const fmtTime = ts => ts ? new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' }) : '—';
+  const fmtCost = v => typeof v === 'number' ? '$' + v.toFixed(2) : '—';
+  const fmtDur = s => {
+    if (typeof s !== 'number') return '—';
+    s = Math.round(s);
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60, p = v => String(v).padStart(2, '0');
+    return h ? `${h}h ${p(m)}m` : m ? `${m}m ${p(x)}s` : `${x}s`;
+  };
+  const baseName = p => p ? String(p).split(/[\\/]/).filter(Boolean).pop() : '';
+  const badge = (text, tone) => el('span', { class: `badge ${tone}` }, text);
+
+  // Handoff entries (Add-RunHandoffEntry.ps1) attach to their loop session when they carry runId/session
+  function buildRuns(entries, handoffs) {
+    const runs = new Map();
+    const run = id => runs.get(id) ?? runs.set(id, { id, start: null, end: null, summary: null, sessions: new Map() }).get(id);
+    const sess = (r, n) => r.sessions.get(n) ?? r.sessions.set(n, { session: n, messages: [], handoffs: [], record: null, firstTs: null }).get(n);
+    for (const e of entries) {
+      const r = run(e.runId ?? 'unknown');
+      if (e.type === 'loop-start') r.start = e;
+      else if (e.type === 'loop-end') r.end = e;
+      else if (e.type === 'message') { const s = sess(r, e.session); s.messages.push(e); s.firstTs ??= e.ts; }
+      else if (e.type === 'session') sess(r, e.session).record = e;
+      else if (e.type === 'summary') r.summary = e;   // a re-run of the summarizer replaces the earlier one
+    }
+    for (const h of handoffs) runs.get(h.runId)?.sessions.get(Number(h.session))?.handoffs.push(h);
+    return [...runs.values()]
+      .map(r => ({ ...r, list: [...r.sessions.values()].sort((a, b) => a.session - b.session) }))
+      .sort((a, b) => b.id.localeCompare(a.id));
+  }
+
+  // Loop entries have a type; handoff-log.json entries predating the type field are known by recordedAt
+  const asEntry = o => !o || typeof o !== 'object' || Array.isArray(o) ? null
+    : o.type ? o : o.recordedAt ? { ...o, type: 'handoff' } : null;
+
+  // The loop log is JSONL. handoff-log.json is one JSON document ({ entries: [...] }), so try that first.
+  function parse(text) {
+    text = text.replace(/^﻿/, '').trim();
+    try {
+      const doc = JSON.parse(text);
+      const items = Array.isArray(doc) ? doc : Array.isArray(doc?.entries) ? doc.entries : [doc];
+      const entries = items.map(asEntry).filter(Boolean);
+      return { entries, skipped: items.length - entries.length, repo: doc?.repository, unit: 'entries' };
+    } catch { /* not a single document */ }
+    const entries = [];
+    let skipped = 0;
+    for (const line of text.split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        const o = asEntry(JSON.parse(t));
+        if (o) entries.push(o); else skipped++;
+      } catch { skipped++; }
+    }
+    return { entries, skipped, unit: 'lines' };
+  }
+
+  function load(text, source) {
+    const { entries, skipped, repo, unit } = parse(text);
+    const handoffs = entries.filter(e => e.type === 'handoff')
+      .sort((a, b) => (Date.parse(b.recordedAt) || 0) - (Date.parse(a.recordedAt) || 0));
+    const loop = entries.filter(e => e.type !== 'handoff');
+    Object.assign(state, {
+      runs: buildRuns(loop, handoffs), handoffs, entries: loop.length, skipped, unit,
+      source: repo ? `${source} (${repo})` : source
+    });
+    render();
+  }
+
+  function render() {
+    const has = state.runs.length > 0, hasHandoffs = state.handoffs.length > 0;
+    $('#empty').hidden = has || hasHandoffs;
+    $('#report').hidden = !has;
+    $('#handoffs').hidden = !hasHandoffs;
+    $('#run').hidden = $('#expand').hidden = !has;
+    const counts = [state.entries && `${state.entries} log entries`, hasHandoffs && `${state.handoffs.length} handoff entries`]
+      .filter(Boolean).join(' · ') || 'no entries';
+    $('#source').replaceChildren(
+      state.source ? `${state.source} · ${counts}` : 'No log loaded',
+      state.skipped ? el('span', { class: 'notice' }, ` · ${state.skipped} unreadable ${state.unit} skipped`) : '');
+
+    let runFilter = '';
+    if (has) {
+      const sel = $('#run'), cur = sel.value;
+      sel.replaceChildren(
+        el('option', { value: '' }, `All runs (${state.runs.length})`),
+        ...state.runs.map(r => el('option', { value: r.id }, `${r.id} · ${baseName(r.start?.project) || 'unknown'}`)));
+      sel.value = runFilter = state.runs.some(r => r.id === cur) ? cur : '';
+      const shown = runFilter ? state.runs.filter(r => r.id === runFilter) : state.runs;
+      renderKpis(shown);
+      renderSummaries(shown);
+      renderTable(shown);
+    }
+    if (hasHandoffs) renderHandoffs(runFilter ? state.handoffs.filter(h => h.runId === runFilter) : state.handoffs);
+  }
+
+  function renderHandoffs(list) {
+    $('#handoff-list').replaceChildren(...(list.length
+      ? list.map(handoffBody)
+      : [el('p', { class: 'muted' }, 'No handoff entries were recorded in this run.')]));
+  }
+
+  function handoffBody(h) {
+    const safe = String(h.safeToProceed ?? '');
+    const [label, tone] = /^yes\b/i.test(safe) ? ['safe to proceed', 'ok'] : /^no\b/i.test(safe) ? ['not safe', 'bad'] : ['unstated', 'warn'];
+    const fields = [
+      ['Did', h.did], ['Verified', h.verified], ['Progress', h.progress], ['Safe to proceed', safe],
+      ['Next', h.next], ['Owner', h.owner], ['Loop session', h.runId && `run ${h.runId} · session ${h.session ?? '?'}`]
+    ].filter(([, v]) => v != null && v !== '');
+    return el('article', { class: 'handoff' },
+      el('h3', {}, badge(label, tone), ' ', h.summary || '(no summary)', h.nextLabel ? el('span', { class: 'muted' }, ` · ${h.nextLabel} next`) : ''),
+      el('time', {}, fmtTime(h.recordedAt)),
+      el('dl', { class: 'meta' }, fields.map(([k, v]) => [el('dt', {}, k), el('dd', {}, String(v))])));
+  }
+
+  function renderKpis(runs) {
+    const all = runs.flatMap(r => r.list), done = all.filter(s => s.record);
+    const ok = done.filter(s => s.record.success).length;
+    const sum = k => done.reduce((a, s) => a + (Number(s.record[k]) || 0), 0);
+    const denials = done.reduce((a, s) => a + (s.record.denials?.length || 0), 0);
+    const tile = (label, value, sub, bad) =>
+      el('div', { class: bad ? 'kpi bad' : 'kpi' }, el('div', { class: 'label' }, label), el('div', { class: 'value' }, value), el('div', { class: 'sub' }, sub));
+    $('#kpis').replaceChildren(
+      tile('Runs', runs.length, `${runs.filter(r => r.end).length} completed`),
+      tile('Sessions', all.length, all.length - done.length ? `${all.length - done.length} incomplete` : 'all recorded'),
+      tile('Success', done.length ? `${Math.round(ok / done.length * 100)}%` : '—', `${ok} of ${done.length} sessions`, ok < done.length),
+      tile('Turns', sum('turns'), done.length ? `${(sum('turns') / done.length).toFixed(1)} per session` : ''),
+      tile('Cost', fmtCost(sum('costUsd')), done.length ? `${fmtCost(sum('costUsd') / done.length)} per session` : ''),
+      tile('Permission denials', denials, denials ? 'see session details' : 'none', denials > 0),
+      ...issueTile(runs));
+  }
+
+  // Shown only when at least one run has a summary; counts issues the summarizer left open
+  function issueTile(runs) {
+    const issues = runs.flatMap(r => r.summary?.summary?.issues ?? []);
+    if (!runs.some(r => r.summary?.summary)) return [];
+    const open = issues.filter(i => i.status === 'open'), high = open.filter(i => i.severity === 'high').length;
+    return [el('div', { class: high ? 'kpi bad' : 'kpi' }, el('div', { class: 'label' }, 'Open issues'),
+      el('div', { class: 'value' }, open.length), el('div', { class: 'sub' }, `${high} high · ${issues.length} found in all`))];
+  }
+
+  const STATUS_TONE = { completed: 'ok', partial: 'warn', blocked: 'warn', failed: 'bad' };
+  const RESULT_TONE = { pass: 'ok', fail: 'bad', 'not-run': 'warn', claimed: 'info' };
+  const SEV_TONE = { high: 'bad', medium: 'warn', low: 'info' };
+  const ISSUE_TONE = { open: 'bad', fixed: 'ok', 'worked-around': 'info', deferred: 'warn' };
+  const SEV_ORDER = { high: 0, medium: 1, low: 2 };
+
+  function renderSummaries(runs) {
+    $('#summaries').replaceChildren(...runs.filter(r => r.summary).map(summaryCard));
+  }
+
+  function summaryCard(r) {
+    const e = r.summary, s = e.summary, proj = baseName(r.start?.project) || 'unknown project';
+    const sub = [`${proj} · run ${r.id}`, e.model && `summarized by ${e.model}`, typeof e.costUsd === 'number' && fmtCost(e.costUsd), fmtTime(e.ts)]
+      .filter(Boolean).join(' · ');
+    if (!s) return el('section', { class: 'card summary err' },
+      el('h3', {}, badge('no summary', 'warn'), ' Run summary not generated'), el('p', { class: 'sub' }, sub), el('p', {}, e.error ?? 'unknown error'));
+    const list = (title, items, f) => items?.length ? [el('h4', {}, `${title} (${items.length})`), el('ul', {}, items.map(f))] : null;
+    const table = (title, head, items, row) => items?.length ? [el('h4', {}, `${title} (${items.length})`),
+      el('table', {}, el('thead', {}, el('tr', {}, head.map(h => el('th', {}, h)))), el('tbody', {}, items.map(row)))] : null;
+    const files = fs => fs?.length ? el('div', { class: 'files muted' }, fs.map(f => el('code', {}, f))) : null;
+    const issues = [...(s.issues ?? [])].sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || (SEV_ORDER[a.severity] ?? 3) - (SEV_ORDER[b.severity] ?? 3));
+    const h = s.loopHealth ?? {};
+    return el('section', { class: 'card summary' },
+      el('h3', {}, badge(s.status ?? 'unknown', STATUS_TONE[s.status] ?? 'warn'), ' ', s.headline ?? ''),
+      el('p', { class: 'sub' }, sub),
+      s.objective ? el('p', {}, el('strong', {}, 'Objective: '), s.objective) : null,
+      list('Accomplished', s.accomplished, a => el('li', {}, el('strong', {}, a.title), a.detail ? ` — ${a.detail}` : '', files(a.files))),
+      table('Verification', ['Result', 'Check', 'Detail'], s.verification, v => el('tr', {},
+        el('td', { class: 'tight' }, badge(v.result, RESULT_TONE[v.result] ?? 'warn')), el('td', {}, v.check), el('td', {}, v.detail))),
+      table('Errors, bugs and risks', ['Severity', 'Kind', 'Issue', 'Location', 'Status'], issues, i => el('tr', {},
+        el('td', { class: 'tight' }, badge(i.severity, SEV_TONE[i.severity] ?? 'warn')), el('td', { class: 'tight' }, i.kind),
+        el('td', {}, el('strong', {}, i.title), i.detail ? el('div', { class: 'muted' }, i.detail) : null),
+        el('td', {}, i.location ? el('code', {}, i.location) : '—'),
+        el('td', { class: 'tight' }, badge(i.status, ISSUE_TONE[i.status] ?? 'warn')))),
+      list('Decisions', s.decisions, d => el('li', {}, el('strong', {}, d.decision), d.rationale ? ` — ${d.rationale}` : '')),
+      table('Changed files', ['Path', 'Change'], s.changedFiles, f => el('tr', {}, el('td', {}, el('code', {}, f.path)), el('td', {}, f.change))),
+      list('Commits', s.commits, c => el('li', {}, el('code', {}, c.sha), ' ', c.subject)),
+      s.commits && !s.commits.length ? el('p', { class: 'muted' }, 'No commits: all changes are uncommitted.') : null,
+      list('Still open', s.openItems, t => el('li', {}, t)),
+      s.needsOwner?.length ? el('div', { class: 'owner' }, list('Waiting on the owner', s.needsOwner, t => el('li', {}, t))) : null,
+      s.nextAction ? el('div', { class: 'next' }, el('h4', {}, 'Next action'), el('p', {}, s.nextAction)) : null,
+      el('h4', {}, 'Loop health'),
+      el('p', {}, `${h.rotations ?? '?'} context rotations · ${h.toolErrors ?? '?'} tool errors · ${h.denials ?? '?'} permission denials`,
+        h.notes ? el('span', { class: 'muted' }, ` — ${h.notes}`) : ''));
+  }
+
+  function renderTable(runs) {
+    const tb = $('#sessions tbody');
+    tb.replaceChildren();
+    for (const r of runs) {
+      const st = r.start ?? {}, cost = r.list.reduce((a, s) => a + (Number(s.record?.costUsd) || 0), 0);
+      tb.append(el('tr', { class: 'run' }, el('td', { colspan: COLS },
+        el('strong', {}, baseName(st.project) || 'unknown project'),
+        ` · run ${r.id}`, st.prompt ? ` · ${st.prompt}` : '', st.permissionMode ? ` · ${st.permissionMode} mode` : '',
+        r.end ? ` · stopped: ${r.end.stopReason}` : ' · no loop-end (still running or interrupted)',
+        ` · ${fmtCost(cost)}`)));
+      for (const s of r.list) {
+        const rec = s.record ?? {};
+        const detail = el('tr', { class: 'detail', hidden: '' }, el('td', { colspan: COLS }, detailBody(s)));
+        const toggle = () => {
+          detail.hidden = !detail.hidden;
+          row.classList.toggle('open', !detail.hidden);
+          row.setAttribute('aria-expanded', String(!detail.hidden));
+        };
+        const row = el('tr', {
+          class: 'sess', tabindex: '0', 'aria-expanded': 'false', onclick: toggle,
+          onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } }
+        },
+          el('td', { class: 'num' }, s.session),
+          el('td', {}, fmtTime(rec.start ?? s.firstTs)),
+          el('td', { class: 'num' }, fmtDur(rec.durationSec)),
+          el('td', {}, badge(rec.outcome ?? 'incomplete', OUTCOME_TONE[rec.outcome ?? 'incomplete'] ?? 'warn')),
+          el('td', {}, rec.success === true ? badge('success', 'ok') : rec.success === false ? badge('fail', 'bad') : '—'),
+          el('td', { class: 'num' }, rec.turns ?? '—'),
+          el('td', { class: 'num' }, fmtCost(rec.costUsd)),
+          el('td', { class: 'num' }, rec.denials ? rec.denials.length : '—'),
+          el('td', { class: 'chev', 'aria-hidden': 'true' }, '▸'));
+        tb.append(row, detail);
+      }
+    }
+  }
+
+  function detailBody(s) {
+    const rec = s.record ?? {};
+    const meta = [
+      ['Session ID', rec.sessionId ?? s.messages[0]?.sessionId], ['Result subtype', rec.subtype],
+      ['Exit code', rec.exitCode], ['Ended', rec.end && fmtTime(rec.end)], ['Raw stream log', rec.rawLog],
+      ['Tokens', typeof rec.tokens === 'number' ? rec.tokens.toLocaleString() : null], ['Loop decision', rec.decision],
+      ['Commit', rec.headBefore && rec.headAfter ? (rec.headBefore === rec.headAfter ? `${rec.headAfter} (unchanged)` : `${rec.headBefore} → ${rec.headAfter}`) : null],
+      ['Handoff entry', rec.handoffEntry], ['Handoff next', rec.handoffNext], ['Handoff owner', rec.handoffOwner], ['Safe to proceed', rec.handoffSafe]
+    ].filter(([, v]) => v != null && v !== '');
+    return [
+      meta.length ? el('dl', { class: 'meta' }, meta.map(([k, v]) => [el('dt', {}, k), el('dd', {}, String(v))])) : null,
+      rec.denials?.length ? el('div', { class: 'denials' }, el('h4', {}, 'Permission denials'),
+        el('ul', {}, rec.denials.map(d => el('li', {}, el('code', {}, d.tool ?? '?'), ' ', d.input ?? '')))) : null,
+      s.handoffs.length ? [el('h4', {}, `Handoff entries (${s.handoffs.length})`), s.handoffs.map(handoffBody)] : null,
+      el('h4', {}, `Responses (${s.messages.length})`),
+      s.messages.length
+        ? s.messages.map(m => el('div', { class: 'msg' }, el('time', {}, fmtTime(m.ts)), el('pre', {}, m.text ?? '')))
+        : el('p', { class: 'muted' }, 'No assistant text was logged.')
+    ];
+  }
+
+  const readFile = f => f && f.text().then(t => load(t, f.name));
+  $('#file').addEventListener('change', e => readFile(e.target.files[0]));
+  $('#run').addEventListener('change', render);
+  $('#expand').addEventListener('click', () => {
+    const rows = [...document.querySelectorAll('tr.sess')], open = rows.some(r => !r.classList.contains('open'));
+    rows.forEach(r => { if (r.classList.contains('open') !== open) r.click(); });
+    $('#expand').textContent = open ? 'Collapse all' : 'Expand all';
+  });
+  document.addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('dragging'); });
+  document.addEventListener('dragleave', e => { if (!e.relatedTarget) document.body.classList.remove('dragging'); });
+  document.addEventListener('drop', e => {
+    e.preventDefault(); document.body.classList.remove('dragging');
+    readFile(e.dataTransfer.files[0]);
+  });
+
+  const embedded = $('#log-data').textContent.trim();
+  if (embedded) load(embedded, 'embedded log');
+</script>
+</body>
+</html>

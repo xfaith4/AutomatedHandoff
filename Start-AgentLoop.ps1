@@ -1,0 +1,414 @@
+#Requires -Version 7
+<#
+.SYNOPSIS
+  Runs Claude Code headless in a loop. Each iteration is a fresh context window
+  that starts with /handoff. By default it relaunches only when context-guard.ps1
+  set rotate.flag. With -UntilDone it also relaunches after a session that finished
+  its item, and keeps going until the handoff says DONE, is blocked, stalls, or a cap is hit.
+
+.EXAMPLE
+  ./Start-AgentLoop.ps1 -ProjectDir F:\Development\MyRepo -MaxSessions 8
+.EXAMPLE
+  ./Start-AgentLoop.ps1 F:\Development\MyRepo -UntilDone -MaxSessions 20 -MaxCostUsd 60
+#>
+param(
+    [string]$ProjectDir = (Get-Location).Path,
+    [int]$MaxSessions = 10,
+    [string]$Prompt = '/handoff',
+    # auto: the classifier approves routine git/npx/reads that an allowlist can't anticipate; -p has no human to ask
+    [ValidateSet('auto', 'acceptEdits', 'manual', 'dontAsk', 'plan', 'bypassPermissions')]
+    [string]$PermissionMode = 'auto',
+    [string]$HandoffFile = '',          # blank = .claude/agent-loop.json, then auto-discover
+    [string]$LogPath = '',              # blank = .claude/state/agent-loop.log.jsonl (one JSON object per line)
+    [string[]]$ExtraArgs = @(),         # e.g. '--allowedTools','Bash(pwsh:*)','--model','opus'
+    [string]$ClaudePath = $env:CLAUDE_EXE,  # optional explicit path to claude.exe / claude.cmd
+    [switch]$NoSummary,                 # skip the end-of-run summary call (Invoke-LoopSummary.ps1)
+    [string]$SummaryModel = 'sonnet',
+
+    # Until-done mode: one roadmap item per session, keep going until the handoff says DONE
+    [switch]$UntilDone,
+    # Appended to a default '/handoff' prompt in until-done mode. Blank = send the prompt unchanged.
+    [string]$UntilDoneSteer = 'engineering only. Do exactly one roadmap item this session. ' +
+    'If the Next item needs an owner decision, record the question in the handoff Owner line and take the next unblocked roadmap item instead. ' +
+    'If no unblocked item is left, write "Safe to proceed: no" and say why. ' +
+    'When the roadmap has no open items left, write the handoff entry with -NextLabel DONE and -Next "DONE: <why>".',
+    [double]$MaxCostUsd = 0,            # 0 = no cap. Cumulative estimated cost (the CLI's total_cost_usd per session)
+    [long]$MaxTokens = 0,               # 0 = no cap. Cumulative input + cache + output tokens from the result events
+    [int]$MaxConsecutiveFailures = 2,   # until-done: a failed session is retried until this many fail in a row
+    [int]$StallSessions = 2,            # until-done: stop after this many finished sessions in a row with no progress
+    [switch]$StopOnOwnerItems,          # until-done: also stop when the top entry's Owner line is not "nothing"
+    [double]$RateLimitWaitMinutes = 0,  # 0 = stop on a usage-limit result. Otherwise sleep this long and start a new session
+    [int]$MaxRateLimitWaits = 3
+)
+
+# Locate the Claude Code CLI: explicit -> PATH -> common Windows install locations
+if (-not $ClaudePath) {
+    $ClaudePath = (Get-Command claude -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1).Source
+}
+if (-not $ClaudePath) {
+    $ClaudePath = @(
+        "$HOME\.local\bin\claude.exe"            # native installer (irm https://claude.ai/install.ps1 | iex)
+        "$env:APPDATA\npm\claude.cmd"            # npm i -g @anthropic-ai/claude-code
+        "$env:LOCALAPPDATA\Programs\claude\claude.exe"
+    ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+}
+if (-not $ClaudePath) {
+    throw "Claude Code CLI not found. Install it (irm https://claude.ai/install.ps1 | iex), " +
+    "add it to PATH, or pass -ClaudePath / set `$env:CLAUDE_EXE."
+}
+Write-Host "Claude CLI: $ClaudePath" -ForegroundColor DarkGray
+
+Set-Location $ProjectDir
+$stateDir = Join-Path $ProjectDir '.claude/state'
+$flag = Join-Path $stateDir 'rotate.flag'
+$runDir = Join-Path $stateDir 'runs'
+. (Join-Path $PSScriptRoot 'Resolve-HandoffFile.ps1')
+$HandoffFile = Resolve-HandoffFile $ProjectDir $HandoffFile
+$handoff = Join-Path $ProjectDir $HandoffFile
+Write-Host "Handoff file: $HandoffFile" -ForegroundColor DarkGray
+New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+
+if ($UntilDone -and $Prompt -eq '/handoff' -and $UntilDoneSteer) { $Prompt = "/handoff $UntilDoneSteer" }
+if ($UntilDone) {
+    $caps = @(
+        "sessions $MaxSessions"
+        if ($MaxCostUsd -gt 0) { 'cost ${0:N2}' -f $MaxCostUsd }
+        if ($MaxTokens -gt 0) { "tokens $MaxTokens" }
+        "stall after $StallSessions idle sessions"
+        "failures $MaxConsecutiveFailures in a row"
+        if ($RateLimitWaitMinutes -gt 0) { "usage-limit wait $RateLimitWaitMinutes min x$MaxRateLimitWaits" } else { 'stop on usage limit' }
+    ) -join ' | '
+    Write-Host "Until-done mode: continue after each finished item until the handoff says DONE." -ForegroundColor Cyan
+    Write-Host "Caps: $caps" -ForegroundColor DarkGray
+    Write-Host "Prompt: $Prompt" -ForegroundColor DarkGray
+}
+
+# tk wraps git/cat/etc. in { ... } so allow-listed commands need a human to approve them; -p has none
+$env:TK_DISABLE = '1'
+# claude writes UTF-8. Decoding it with the console code page (437) logged an en dash as 'ΓÇô'.
+$prevOutputEncoding = [Console]::OutputEncoding
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+# The session-hygiene handoff lives outside the repo; let unattended sessions write it
+$hygieneDir = (Join-Path $HOME '.claude/handoffs') -replace '\\', '/'
+
+# Run log: everything shown in the terminal, as JSONL. AgentLoopReport.html renders it.
+if (-not $LogPath) { $LogPath = Join-Path $stateDir 'agent-loop.log.jsonl' }
+$runId = Get-Date -Format 'yyyyMMdd-HHmmss'
+# Add-RunHandoffEntry.ps1 records these so the report can show each handoff under its session
+$env:AGENT_LOOP_RUN_ID = $runId
+function Write-LoopLog([string]$Type, [System.Collections.IDictionary]$Fields) {
+    $entry = [ordered]@{ ts = (Get-Date).ToString('o'); type = $Type; runId = $runId }
+    foreach ($k in $Fields.Keys) { $entry[$k] = $Fields[$k] }
+    Add-Content -LiteralPath $LogPath -Value ($entry | ConvertTo-Json -Compress -Depth 6)
+}
+
+# --- helpers -----------------------------------------------------------------
+
+function Get-GitHead {
+    # Short HEAD sha, or $null outside a repo / without git. Never throws.
+    try {
+        $h = git -C $ProjectDir rev-parse --short HEAD 2>$null
+        if ($LASTEXITCODE -eq 0 -and $h) { return "$h".Trim() }
+    }
+    catch {}
+    return $null
+}
+
+function Get-HandoffBrief([string]$Path) {
+    # The top entry of a newest-first handoff (Add-RunHandoffEntry.ps1 shape), or the sections of a
+    # session-hygiene style handoff. Everything is best-effort text; missing fields stay ''.
+    $b = [ordered]@{ exists = $false; heading = ''; label = ''; did = ''; next = ''; owner = ''; safe = ''; status = '' }
+    if (-not (Test-Path $Path)) { return $b }
+    $b.exists = $true
+    $lines = @([IO.File]::ReadAllLines($Path))
+    $starts = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^##\s') { $i } })
+    # Head region = file header + top entry: a Status: DONE line further down belongs to an older entry
+    $endIdx = if ($starts.Count -ge 2) { $starts[1] - 1 } else { $lines.Count - 1 }
+    $head = if ($lines.Count) { $lines[0..$endIdx] } else { @() }
+    foreach ($l in $head) {
+        if ($l -match '^\s*Status:\s*(DONE|COMPLETE)\b') { $b.status = $Matches[1].ToUpper(); break }
+    }
+    $entryRx = '^##\s+(?<date>\d{4}-\d{2}-\d{2})\s+\S+\s+(?<summary>.*?)(?:\s+\((?<label>[^()]+?)\s+next\))?\s*$'
+    if ($starts.Count -and $lines[$starts[0]] -match $entryRx) {
+        $b.heading = $lines[$starts[0]].Substring(3).Trim()
+        $b.label = "$($Matches['label'])".Trim()
+        foreach ($l in $head) {
+            if ($l -match '^\s*-\s+\*\*(?<k>[^*]+?):\*\*\s*(?<v>.*)$') {
+                switch ($Matches['k'].Trim().ToLower()) {
+                    'did' { $b.did = $Matches['v'].Trim() }
+                    'next' { $b.next = $Matches['v'].Trim() }
+                    'owner' { $b.owner = $Matches['v'].Trim() }
+                    'safe to proceed' { $b.safe = $Matches['v'].Trim() }
+                }
+            }
+        }
+        return $b
+    }
+    # Session-hygiene template: "# Handoff: ..." with ## Status / ## Next action / ## Waiting on the user
+    $title = $lines | Where-Object { $_ -match '^#\s' } | Select-Object -First 1
+    if ($title) { $b.heading = $title.Substring(1).Trim() }
+    $section = ''
+    $buf = @{}
+    foreach ($l in $lines) {
+        if ($l -match '^##\s+(.+?)\s*$') { $section = $Matches[1].ToLower(); continue }
+        if ($section -and $l.Trim()) { $buf[$section] = (@($buf[$section], $l.Trim()) -join ' ').Trim() }
+    }
+    $b.did = "$($buf['status'])"
+    $b.next = "$($buf['next action'])"
+    $b.owner = "$($buf['waiting on the user'])"
+    return $b
+}
+
+function Test-HandoffDone($Brief) {
+    if ($Brief.status) { return $true }
+    # Case-sensitive: a Next line that starts with "Done-when" must not end the run
+    if ($Brief.label -cmatch '^(DONE|COMPLETE)$') { return $true }
+    return [bool]($Brief.next -cmatch '^(DONE|COMPLETE)\b')
+}
+
+function Test-OwnerNothing([string]$Owner) {
+    return [bool]($Owner -match '^\s*(nothing|none|n/?a|-|—)?\s*\.?\s*$')
+}
+
+function Get-ResultTokens($Result) {
+    $u = $Result.usage
+    if (-not $u) { return [long]0 }
+    [long]$t = 0
+    foreach ($k in 'input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'output_tokens') {
+        $p = $u.PSObject.Properties[$k]
+        if ($p -and $null -ne $p.Value) { $t += [long]$p.Value }
+    }
+    return $t
+}
+
+function Format-Tokens([long]$T) {
+    if ($T -ge 1000000) { return '{0:N1}M' -f ($T / 1000000) }
+    if ($T -ge 1000) { return '{0:N0}k' -f ($T / 1000) }
+    return "$T"
+}
+
+function Limit-Text([string]$S, [int]$Max = 150) {
+    $S = "$S" -replace '\s+', ' '
+    if ($S.Length -le $Max) { return $S }
+    return $S.Substring(0, $Max - 1) + '…'
+}
+
+# A usage-limit or overload result. The CLI puts the message in result/errors with subtype != success.
+$rateLimitRx = '(?i)usage limit|rate.?limit|hit your limit|limit reached|out of (extra )?usage|resets? (at|in)\b|overloaded|\b429\b'
+
+# --- loop --------------------------------------------------------------------
+
+Write-LoopLog 'loop-start' ([ordered]@{
+        project = $ProjectDir; prompt = $Prompt; permissionMode = $PermissionMode
+        maxSessions = $MaxSessions; handoffFile = $HandoffFile
+        untilDone = [bool]$UntilDone; maxCostUsd = $MaxCostUsd; maxTokens = $MaxTokens
+        stallSessions = $StallSessions; maxConsecutiveFailures = $MaxConsecutiveFailures
+        rateLimitWaitMinutes = $RateLimitWaitMinutes
+    })
+$sessions = [System.Collections.Generic.List[object]]::new()
+$stopReason = 'max-sessions'
+$totalCost = 0.0
+$totalTokens = [long]0
+$consecutiveFailures = 0
+$stallCount = 0
+$rateWaits = 0
+$prevBrief = Get-HandoffBrief $handoff
+
+for ($n = 1; $n -le $MaxSessions; $n++) {
+    Remove-Item $flag -ErrorAction SilentlyContinue
+    $env:AGENT_LOOP_SESSION = "$n"
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $log = Join-Path $runDir "$stamp-s$n.jsonl"
+    $headBefore = Get-GitHead
+    Write-Host "`n[$n/$MaxSessions] Fresh session -> $(Limit-Text $Prompt 90)" -ForegroundColor Cyan
+    if ($prevBrief.exists -and $prevBrief.next) { Write-Host "  picking up: $(Limit-Text $prevBrief.next 110)" -ForegroundColor DarkGray }
+
+    $global:LASTEXITCODE = 0
+    $started = Get-Date
+    $sessionId = $null
+    $result = $null
+    $denials = @()
+    & $ClaudePath -p $Prompt --permission-mode $PermissionMode --output-format stream-json --verbose --add-dir $hygieneDir @ExtraArgs |
+        Tee-Object -FilePath $log |
+        ForEach-Object {
+            # A non-JSON line throws even under SilentlyContinue and would leave the previous $e in place
+            try { $e = $_ | ConvertFrom-Json -ErrorAction Stop } catch { return }
+            if ($e.type -eq 'system' -and $e.subtype -eq 'init') { $sessionId = $e.session_id }
+            elseif ($e.type -eq 'assistant') {
+                $e.message.content | Where-Object type -eq 'text' |
+                    ForEach-Object {
+                        Write-Host $_.text -ForegroundColor Gray
+                        Write-LoopLog 'message' ([ordered]@{ session = $n; sessionId = $sessionId; text = $_.text })
+                    }
+                }
+                elseif ($e.type -eq 'result') {
+                    $result = $e
+                    Write-Host ("Session end: {0} | turns {1} | `${2:N2} | {3} tokens" -f $e.subtype, $e.num_turns, $e.total_cost_usd, (Format-Tokens (Get-ResultTokens $e))) -ForegroundColor Yellow
+                    $denied = @($e.permission_denials | Where-Object { $_ })
+                    if ($denied.Count) {
+                        Write-Host "Permission denials: $($denied.Count)" -ForegroundColor Red
+                        $denials = @($denied | ForEach-Object {
+                                $what = if ($_.tool_input.command) { $_.tool_input.command } else { $_.tool_input.file_path }
+                                Write-Host ("  {0}: {1}" -f $_.tool_name, $what) -ForegroundColor Red
+                                [ordered]@{ tool = $_.tool_name; input = $what }
+                            })
+                    }
+                }
+            }
+    $exit = $LASTEXITCODE
+    $ended = Get-Date
+
+    if (Test-Path $handoff) { Copy-Item $handoff (Join-Path $runDir "$stamp-s$n-handoff.md") }
+    $headAfter = Get-GitHead
+    $brief = Get-HandoffBrief $handoff
+    $tokens = Get-ResultTokens $result
+    $errText = if ($result) { "$($result.result) $(@($result.errors) -join ' ')" } else { '' }
+    $rateLimited = $result -and ($result.is_error -or $result.subtype -ne 'success') -and $errText -match $rateLimitRx
+
+    $outcome = if ($rateLimited) { 'rate-limited' }
+    elseif ($exit -ne 0 -or -not $result) { 'failed' }
+    elseif (Test-HandoffDone $brief) { 'done' }
+    elseif (Test-Path $flag) { 'rotated' }
+    else { 'finished' }
+
+    $totalCost += [double]($result.total_cost_usd ?? 0)
+    $totalTokens += $tokens
+
+    # Progress = a new top entry that moved the roadmap pointer or landed a commit
+    $newEntry = $brief.exists -and ($brief.heading -ne $prevBrief.heading -or $brief.did -ne $prevBrief.did)
+    $sameLabel = $brief.label -and ($brief.label -eq $prevBrief.label)
+    $committed = $headBefore -and $headAfter -and ($headBefore -ne $headAfter)
+    $progressed = $newEntry -and (-not $sameLabel -or $committed)
+    if ($outcome -eq 'finished') { if ($progressed) { $stallCount = 0 } else { $stallCount++ } }
+    elseif ($outcome -in 'done', 'rotated') { $stallCount = 0 }
+    $prevBrief = $brief
+
+    $blocked = $UntilDone -and $outcome -eq 'finished' -and (
+        ($brief.safe -match '^\s*no\b') -or ($StopOnOwnerItems -and -not (Test-OwnerNothing $brief.owner)))
+
+    # Decide: keep going or stop, and say why in one line
+    $go = $false
+    $wait = 0.0
+    switch ($outcome) {
+        'rate-limited' {
+            if ($RateLimitWaitMinutes -gt 0 -and $rateWaits -lt $MaxRateLimitWaits) {
+                $rateWaits++; $go = $true; $wait = $RateLimitWaitMinutes
+                $decision = "usage limit hit - waiting $RateLimitWaitMinutes min ($rateWaits/$MaxRateLimitWaits), then a new session"
+            }
+            else { $decision = 'usage limit hit - stopping' }
+        }
+        'failed' {
+            $consecutiveFailures++
+            if ($UntilDone -and $consecutiveFailures -lt $MaxConsecutiveFailures) {
+                $go = $true; $decision = "session failed ($consecutiveFailures/$MaxConsecutiveFailures) - retrying with a fresh session"
+            }
+            else { $decision = "session failed (exit $exit, result event: $([bool]$result)) - stopping" }
+        }
+        'done' { $decision = 'handoff says DONE - stopping' }
+        'rotated' { $consecutiveFailures = 0; $go = $true; $decision = 'context limit hit - rotating to a fresh session' }
+        'finished' {
+            $consecutiveFailures = 0
+            if (-not $UntilDone) { $decision = 'session ended under the limit - task finished' }
+            elseif ($blocked) { $outcome = 'blocked'; $decision = 'handoff says it cannot proceed - stopping for the owner' }
+            elseif ($stallCount -ge $StallSessions) { $outcome = 'stalled'; $decision = "no progress in $stallCount sessions (same next item, no new commit) - stopping" }
+            else { $go = $true; $decision = 'item finished under the limit - continuing (until-done)' }
+        }
+    }
+    if ($go -and $MaxCostUsd -gt 0 -and $totalCost -ge $MaxCostUsd) { $go = $false; $stopReason = 'cost-cap'; $decision = ('cost cap reached (${0:N2} of ${1:N2}) - stopping' -f $totalCost, $MaxCostUsd) }
+    elseif ($go -and $MaxTokens -gt 0 -and $totalTokens -ge $MaxTokens) { $go = $false; $stopReason = 'token-cap'; $decision = "token cap reached ($(Format-Tokens $totalTokens) of $(Format-Tokens $MaxTokens)) - stopping" }
+    elseif ($go -and $n -ge $MaxSessions) { $decision += " - but session cap $MaxSessions reached" }
+    elseif (-not $go) { $stopReason = $outcome }
+
+    $row = [ordered]@{
+        session      = $n
+        sessionId    = $sessionId ?? $result.session_id
+        start        = $started.ToString('o')
+        end          = $ended.ToString('o')
+        durationSec  = [math]::Round(($ended - $started).TotalSeconds, 1)
+        outcome      = $outcome
+        success      = $outcome -notin 'failed', 'rate-limited' -and $result.subtype -eq 'success' -and -not $result.is_error
+        subtype      = $result.subtype
+        exitCode     = $exit
+        turns        = $result.num_turns
+        costUsd      = $result.total_cost_usd
+        tokens       = $tokens
+        denials      = $denials
+        rawLog       = $log
+        decision     = $decision
+        headBefore   = $headBefore
+        headAfter    = $headAfter
+        handoffEntry = $brief.heading
+        handoffNext  = $brief.next
+        handoffOwner = $brief.owner
+        handoffSafe  = $brief.safe
+    }
+    Write-LoopLog 'session' $row
+    $sessions.Add([pscustomobject]$row)
+
+    # Per-session brief: what the session left behind and what the loop decided
+    $tone = switch ($outcome) { 'done' { 'Green' } 'finished' { 'Green' } 'rotated' { 'Magenta' } 'failed' { 'Red' } 'rate-limited' { 'Yellow' } default { 'Yellow' } }
+    Write-Host ''
+    Write-Host ("-- Session $n brief ").PadRight(72, '-') -ForegroundColor Cyan
+    Write-Host ("  {0,-9} {1}" -f 'Outcome', $outcome) -ForegroundColor $tone
+    Write-Host ("  {0,-9} {1}" -f 'Decision', $decision) -ForegroundColor $tone
+    if ($brief.exists) {
+        Write-Host ("  {0,-9} {1}" -f 'Handoff', (Limit-Text $brief.heading 110))
+        if ($brief.did) { Write-Host ("  {0,-9} {1}" -f 'Did', (Limit-Text $brief.did)) }
+        if ($brief.next) { Write-Host ("  {0,-9} {1}" -f 'Next', (Limit-Text $brief.next)) }
+        if ($brief.safe) { Write-Host ("  {0,-9} {1}" -f 'Safe', (Limit-Text $brief.safe 110)) }
+        $ownerTone = if (Test-OwnerNothing $brief.owner) { 'DarkGray' } else { 'Yellow' }
+        Write-Host ("  {0,-9} {1}" -f 'Owner', (Limit-Text ($brief.owner ? $brief.owner : 'nothing'))) -ForegroundColor $ownerTone
+        if (-not $newEntry) { Write-Host '  (handoff entry unchanged by this session)' -ForegroundColor Yellow }
+    }
+    else { Write-Host '  Handoff   (none found)' -ForegroundColor Yellow }
+    $commitNote = if ($committed) { "$headBefore -> $headAfter (new commit)" } elseif ($headAfter) { "$headAfter (unchanged)" } else { 'not a git repo' }
+    Write-Host ("  {0,-9} {1}" -f 'Commit', $commitNote)
+    $budget = 'sessions {0}/{1} | cost ${2:N2}{3} | tokens {4}{5}' -f $n, $MaxSessions, $totalCost,
+    ($MaxCostUsd -gt 0 ? ('/${0:N2}' -f $MaxCostUsd) : ''), (Format-Tokens $totalTokens),
+    ($MaxTokens -gt 0 ? "/$(Format-Tokens $MaxTokens)" : '')
+    if ($UntilDone) { $budget += " | idle $stallCount/$StallSessions" }
+    Write-Host ("  {0,-9} {1}" -f 'Budget', $budget) -ForegroundColor DarkGray
+    Write-Host ('-' * 72) -ForegroundColor Cyan
+
+    if (-not $go) { break }
+    if ($wait -gt 0) {
+        $until = (Get-Date).AddMinutes($wait)
+        Write-Host ("Sleeping until {0:HH:mm:ss} ..." -f $until) -ForegroundColor Yellow
+        Start-Sleep -Seconds ([math]::Ceiling($wait * 60))
+    }
+}
+
+Write-LoopLog 'loop-end' ([ordered]@{
+        sessions     = $sessions.Count
+        stopReason   = $stopReason
+        totalTurns   = [int]($sessions | Measure-Object turns -Sum).Sum
+        totalCostUsd = [math]::Round([double]$totalCost, 4)
+        totalTokens  = $totalTokens
+    })
+
+Write-Host "`nRun $runId - stopped: $stopReason" -ForegroundColor Cyan
+$sessions | Format-Table session, outcome, success, turns,
+@{ n = 'cost'; e = { if ($null -ne $_.costUsd) { '${0:N2}' -f $_.costUsd } } },
+@{ n = 'tokens'; e = { Format-Tokens $_.tokens } },
+durationSec, @{ n = 'denials'; e = { @($_.denials).Count } },
+@{ n = 'next'; e = { Limit-Text $_.handoffNext 60 } } -AutoSize | Out-Host
+Write-Host ('Totals: {0} sessions | ${1:N2} | {2} tokens' -f $sessions.Count, $totalCost, (Format-Tokens $totalTokens)) -ForegroundColor DarkGray
+Write-Host "Log: $LogPath" -ForegroundColor DarkGray
+[Console]::OutputEncoding = $prevOutputEncoding
+# Add-RunHandoffEntry.ps1 writes handoff-log.json next to the handoff file
+$handoffLog = Join-Path (Split-Path $handoff -Parent) 'handoff-log.json'
+if (-not $NoSummary -and $sessions.Count) {
+    # One read-only call that turns the run into the report's summary panel; a failure never fails the loop
+    Write-Host "`nSummarizing run $runId ($SummaryModel)..." -ForegroundColor Cyan
+    try {
+        & (Join-Path $PSScriptRoot 'Invoke-LoopSummary.ps1') -ProjectDir $ProjectDir -RunId $runId -LogPath $LogPath `
+            -HandoffLogPath $handoffLog -ClaudePath $ClaudePath -Model $SummaryModel | Out-Null
+    }
+    catch { Write-Warning "Run summary not written: $($_.Exception.Message)" }
+}
+try {
+    $report = & (Join-Path $PSScriptRoot 'New-AgentLoopReport.ps1') -LogPath $LogPath -HandoffLogPath $handoffLog
+    Write-Host "Report: $($report.FullName)" -ForegroundColor DarkGray
+}
+catch { Write-Warning "Report not written: $($_.Exception.Message)" }

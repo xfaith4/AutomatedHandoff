@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "repository": "AutomatedHandoff",
+  "entries": [
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-01T18:42:19-05:00",
+      "summary": "Create CLAUDE.md for AutomatedHandoff",
+      "did": "Added CLAUDE.md: source-vs-installed copies, reinstall and parse-check commands, loop/guard/resolver architecture, known issues.",
+      "verified": "Docs only; no scripts changed. Commands in CLAUDE.md taken from existing handoff and script params; not re-run.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; documentation only",
+      "next": "Ben reinstalls (Install-AgentLoop.ps1 -SkipHooks -ProfilePath <VSCode profile>) and runs Start-Agent MyFinancialLedger -Max 1 to confirm auto mode clears the denials.",
+      "nextLabel": "agent-loop-live-check",
+      "owner": "Same as previous entry: approve auto mode for unattended runs; scope the Stop guard to loop runs."
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-01T19:35:39-05:00",
+      "summary": "Agent-loop JSONL run log and HTML report",
+      "did": "Start-AgentLoop.ps1: logs loop-start/message/session/loop-end JSONL to .claude/state/agent-loop.log.jsonl (-LogPath), prints a session table at loop end, builds the report; fixed a bug where a non-JSON stream line re-processed the previous event. New: New-AgentLoopReport.ps1, AgentLoopReport.html. Install-AgentLoop.ps1 copies both. CLAUDE.md updated.",
+      "verified": "All .ps1 parse with 0 errors. Fake-claude runs (rotate->finish, fail) produced the expected log entries, outcomes, denials and terminal table. Embedded report rendered in Chrome via 127.0.0.1: KPIs, run groups, incomplete run, skipped bad line, expanded details OK. Not verified: a live claude run, and the empty template opened directly from file://.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; installed copies are stale until Ben reinstalls",
+      "next": "Ben reinstalls (Install-AgentLoop.ps1 -SkipHooks -ProfilePath <VSCode profile>) and runs Start-Agent MyFinancialLedger -Max 1; confirm denials are gone and agent-loop-report.html opens.",
+      "nextLabel": "agent-loop-live-check",
+      "owner": "Same as before: approve auto mode for unattended runs; scope the Stop guard to loop runs."
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-01T19:51:38-05:00",
+      "summary": "Report reads handoff-log.json (no more unreadable lines)",
+      "did": "AgentLoopReport.html: parses whole-JSON docs before JSONL, renders a Handoff entries section and per-session handoffs. Add-RunHandoffEntry.ps1 (+Tests): type=handoff on every entry (backfills old ones), runId/session from AGENT_LOOP_RUN_ID/AGENT_LOOP_SESSION. Start-AgentLoop.ps1 sets those env vars and passes -HandoffLogPath; New-AgentLoopReport.ps1 embeds handoff entries as JSONL. handoff-log.json backfilled. CLAUDE.md updated.",
+      "verified": "All .ps1 parse 0 errors. Pester Add-RunHandoffEntry.Tests.ps1: 10 passed 0 failed. Chrome via 127.0.0.1: handoff-log.json loads as 2 entries 0 skipped; untyped legacy doc 2 entries; JSONL with a bad line still reports 1 skipped; embedded report shows the handoff under its session and </script> survives. Not verified: live claude run.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; installed copies in ~/.claude/agent-loop are stale until reinstall",
+      "next": "Ben reinstalls (Install-AgentLoop.ps1 -SkipHooks -ProfilePath <VSCode profile>) and runs Start-Agent MyFinancialLedger -Max 1; confirm the report shows that run's handoff entry under session 1.",
+      "nextLabel": "agent-loop-live-check",
+      "owner": "Same as before: approve auto mode for unattended runs; scope the Stop guard to loop runs (AGENT_LOOP_RUN_ID now exists to gate on)."
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-02T04:04:22-05:00",
+      "summary": "Create README.md for AutomatedHandoff",
+      "did": "Added README.md: purpose, loop diagram, stop conditions, requirements, install and Start-Agent parameters, handoff resolution, context guard, logs/report, file map, known limitations.",
+      "verified": "Docs only; no scripts changed. Parameters and defaults checked against the param blocks in Install-AgentLoop.ps1 (Start-Agent), Start-AgentLoop.ps1, context-guard.ps1 and New-AgentLoopReport.ps1. markdownlint not run.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; documentation only, installed copies still stale until reinstall",
+      "next": "Ben reinstalls (Install-AgentLoop.ps1 -SkipHooks -ProfilePath <VSCode profile>) and runs Start-Agent MyFinancialLedger -Max 1; confirm the report shows that run's handoff entry under session 1.",
+      "nextLabel": "agent-loop-live-check",
+      "owner": "Same as before: approve auto mode for unattended runs; scope the Stop guard to loop runs."
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-04T22:58:05-05:00",
+      "summary": "End-of-run AI summary for agent-loop runs",
+      "did": "New Invoke-LoopSummary.ps1, LoopSummaryPrompt.md, loop-summary.schema.json. Start-AgentLoop.ps1: calls the summarizer at loop end (-NoSummary, -SummaryModel), sets Console OutputEncoding to UTF-8 (fixes the cp437 mojibake in logs). AgentLoopReport.html: renders type:summary as a run summary panel plus an Open issues KPI. Install-AgentLoop.ps1 copies the 3 new files. CLAUDE.md updated.",
+      "verified": "Parse: 0 errors in all 6 scripts. Digest-only on the UnifiedAIToolbox run 20261104-073919: 20 KB, 2 tool errors found, 0 mojibake left. Native-arg round-trip of the schema and settings JSON via python: ok. Stand-in claude success and failure paths both append a summary line. Sample summary validated with jsonschema. Both reports rendered in Chrome on 127.0.0.1 with no console errors. NOT verified: a real claude -p --json-schema call (nested headless is blocked here), so structured_output parsing against the real CLI and disableAllHooks are unconfirmed.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; installed copy not yet updated",
+      "next": "Reinstall with -SkipHooks, then run Invoke-LoopSummary.ps1 -ProjectDir UnifiedAIToolbox against run 20261104-073919 and open its agent-loop-report.html",
+      "nextLabel": "loop-summary-live-check",
+      "owner": "Run the reinstall and the live summarizer call"
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-04T23:17:11-05:00",
+      "summary": "Fix summarizer CLI lookup under StrictMode",
+      "did": "Invoke-LoopSummary.ps1: test the Get-Command result before reading .Source; added the LOCALAPPDATA fallback; copied to ~/.claude/agent-loop",
+      "verified": "Parse 0 errors; the lookup with no claude on PATH under StrictMode resolves ~/.local/bin/claude.exe. Real summarizer call still unverified.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes",
+      "next": "Ben reruns Invoke-LoopSummary.ps1 on UnifiedAIToolbox, then New-AgentLoopReport.ps1",
+      "nextLabel": "loop-summary-live-check",
+      "owner": "Rerun the live summarizer call"
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-06T22:02:47-05:00",
+      "summary": "Answered why a -Max 3 run stopped after one session",
+      "did": "No files changed. Explained that -MaxSessions is a cap, not a target: Start-AgentLoop.ps1 line 121 marks a session finished when rotate.flag is absent and breaks the loop; the 300PixelLED_2812B run ended at 17 turns under the 160k soft limit, so no rotation happened.",
+      "verified": "Read Start-AgentLoop.ps1 lines 118-124 to confirm the outcome logic. Nothing run.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; no changes, nothing uncommitted",
+      "next": "If Ben wants the loop to continue until the handoff says DONE, change the finished outcome at Start-AgentLoop.ps1:121 to rotate unless Status: DONE, add an owner-gate check, then reinstall and live-check.",
+      "nextLabel": "loop-until-done (optional)",
+      "owner": "Decide whether finished sessions should rotate until the handoff is DONE, or keep current behaviour."
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-06T22:26:59-05:00",
+      "summary": "Until-done mode: drive a roadmap to completion with guards and per-session briefs",
+      "did": "Start-AgentLoop.ps1: -UntilDone (continue after finished sessions), -UntilDoneSteer appended to /handoff, outcomes done/blocked/stalled/failed/rate-limited/cost-cap/token-cap, Get-HandoffBrief parses the top entry, per-session brief and budget printed, session log rows carry tokens/decision/head sha/handoff fields. AgentLoopReport.html: new outcome tones and detail fields. Install-AgentLoop.ps1: Start-Agent gained -UntilDone -MaxCost -MaxTokens -RateLimitWait. tests/Test-AgentLoop.ps1 + tests/Fake-Claude.ps1: 16 stand-in scenarios. README.md and CLAUDE.md updated.",
+      "verified": "Parse: 8 scripts, 0 errors. tests\\Test-AgentLoop.ps1: 16 scenarios, 0 failed. Installer rendered Start-Agent into a scratch profile: 0 parse errors, new params pass through. node --check on the report inline script: ok. README markdownlint clean. Not verified: a live until-done run against a real roadmap, and whether a real usage-limit result matches the rate-limit regex.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; source edited only, installed copy in ~/.claude/agent-loop is stale until Ben reinstalls",
+      "next": "Ben: reinstall (pwsh -NoProfile -File .\\Install-AgentLoop.ps1 -SkipHooks -ProfilePath \"$HOME\\OneDrive\\Documents\\PowerShell\\Microsoft.VSCode_profile.ps1\"; . $PROFILE), then a live run: Start-Agent <repo> -UntilDone -Max 3 -MaxCost 15. Check the per-session briefs and that a finished session continues.",
+      "nextLabel": "until-done live check",
+      "owner": "Reinstall and run the live check. Decide whether a usage-limit wait should count against -Max (it does now)."
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-06T23:11:23-05:00",
+      "summary": "Until-done live check passed on 300PixelLED_2812B",
+      "did": "No loop code changed. Live run 20261106-224004: 3 sessions, E0 items 2-4 done, each session continued after its brief, stopped at max-sessions, $13.72 of $15 cap, 6.2M tokens. CLAUDE.md: note on the two profile files and absolute installer path (the first attempt failed on a stale Start-Agent in Microsoft.PowerShell_profile.ps1).",
+      "verified": "Live run output read end to end: briefs printed per session, decision lines correct, budget line correct, summary and report produced. Not verified: stall and rate-limit paths against the real CLI; commit-based progress never fired because /handoff treats committing as an owner task.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; nothing uncommitted here (not a git repo)",
+      "next": "Optional: add a -CommitEachItem steer (or document the -Prompt variant) so unattended runs commit per item and the commit-based progress check can fire. Otherwise no engineering next; the mode is live.",
+      "nextLabel": "commit-per-item steer (optional)",
+      "owner": "Decide whether unattended runs may commit per item. Whether a usage-limit wait should count against -Max."
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-06T23:23:36-05:00",
+      "summary": "Owner approved commit-per-item, final PR session, and one repair session",
+      "did": "No code changed; context limit reached. Decision recorded for the next session to build.",
+      "verified": "nothing to verify",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; design approved, no uncommitted work here",
+      "next": "Build -CommitEachItem / -PullRequest in Start-AgentLoop.ps1 and Start-Agent. Spec: (1) at loop start, if enabled, create and switch to branch agent-loop/<runId> from HEAD (refuse if tree dirty unless -AllowDirty); (2) steer appends \"commit each completed item on the current branch with a conventional message; never touch main\"; (3) reserve 2 sessions of -Max (and the same share of -MaxCost/-MaxTokens): item sessions run to Max-2, then a PR session with prompt \"push the branch and open a PR to main with gh pr create; body = summary of all handoff entries this run plus git log base..HEAD; this PR is the final summary and change request\"; (4) after the PR session, scan the run: failed sessions, tool errors from the raw stream logs (reuse the extraction in Invoke-LoopSummary.ps1), push/gh failures, and handoff entries with Safe to proceed: no. If any, run exactly one repair session with those findings in the prompt: fix, commit, push, gh pr edit the body. (5) Log pr URL, branch, repair findings on loop-end; show in brief, table and report. (6) Add stand-in scenarios: pr-created, repair-triggered, repair-skipped, dirty-tree-refused (Fake-Claude must fake gh or the loop takes -GhPath). Also: a usage-limit wait no longer counts against -Max (owner silent, keep current behavior until asked).",
+      "nextLabel": "commit-and-pr",
+      "owner": "nothing"
+    }
+  ]
+}
