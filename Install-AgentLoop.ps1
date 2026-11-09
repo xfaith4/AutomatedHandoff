@@ -77,7 +77,12 @@ function Start-Agent {
         [string]`$Prompt = '/handoff',
         [string]`$HandoffFile,    # e.g. docs\CURRENT-HANDOFF.md - saved to .claude\agent-loop.json for this repo
         [string[]]`$Tools = @('Bash(pwsh:*)','Edit','Write','Read','Glob','Grep'),
-        [string[]]`$ExtraArgs = @()
+        [string[]]`$ExtraArgs = @(),
+        [int]`$SoftLimit = 170000,    # context-guard rotation point per session
+        [int]`$HardLimit = 190000,
+        [string]`$McpConfig,          # load only the MCP servers in this file (default: none)
+        [switch]`$KeepMcp,            # load the usual MCP servers (costs fixed context in every session)
+        [switch]`$KeepHygieneInjection # let the session-hygiene hook inject its own handoff too
     )
     `$path = (Resolve-Path `$Repo -ErrorAction Stop).Path
     # Snap to repo root so CLAUDE_PROJECT_DIR, the handoff and .claude/state all line up
@@ -105,7 +110,9 @@ function Start-Agent {
     `$loopArgs = @{
         ProjectDir = `$path; MaxSessions = `$Max; PermissionMode = `$Mode; Prompt = `$Prompt; ExtraArgs = `$args2
         UntilDone = `$UntilDone; MaxCostUsd = `$MaxCost; MaxTokens = `$MaxTokens; RateLimitWaitMinutes = `$RateLimitWait
+        SoftLimit = `$SoftLimit; HardLimit = `$HardLimit; KeepMcp = `$KeepMcp; KeepHygieneInjection = `$KeepHygieneInjection
     }
+    if (`$McpConfig) { `$loopArgs.McpConfig = (Resolve-Path `$McpConfig -ErrorAction Stop).Path }
     & '$((Join-Path $ToolsDir 'Start-AgentLoop.ps1'))' @loopArgs
 }
 $end

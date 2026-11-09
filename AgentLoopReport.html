@@ -302,7 +302,31 @@
       tile('Turns', sum('turns'), done.length ? `${(sum('turns') / done.length).toFixed(1)} per session` : ''),
       tile('Cost', fmtCost(sum('costUsd')), done.length ? `${fmtCost(sum('costUsd') / done.length)} per session` : ''),
       tile('Permission denials', denials, denials ? 'see session details' : 'none', denials > 0),
+      ...startupTile(done),
       ...issueTile(runs));
+  }
+
+  // Getting-up-to-speed cost: median context at the first call and at the first Edit/Write.
+  // Only sessions logged since startup metrics were added carry rec.startup.
+  function startupTile(done) {
+    const st = done.map(s => s.record.startup).filter(x => x && typeof x.firstCallCtx === 'number');
+    if (!st.length) return [];
+    const median = a => { const b = [...a].sort((x, y) => x - y), m = b.length >> 1; return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; };
+    const edits = st.filter(x => typeof x.ctxAtFirstEdit === 'number');
+    const sub = edits.length
+      ? `first edit at ${fmtTok(median(edits.map(x => x.ctxAtFirstEdit)))}, call ${median(edits.map(x => x.firstEditCall))} (median of ${edits.length})`
+      : 'no session edited a file';
+    return [el('div', { class: 'kpi' }, el('div', { class: 'label' }, 'Startup context'),
+      el('div', { class: 'value' }, fmtTok(median(st.map(x => x.firstCallCtx)))), el('div', { class: 'sub' }, sub))];
+  }
+
+  function fmtTok(n) { return n >= 1000 ? `${Math.round(n / 1000)}k` : String(Math.round(n)); }
+
+  function startupText(x) {
+    if (!x || typeof x.firstCallCtx !== 'number') return null;
+    const edit = x.firstEditCall ? `first edit at call ${x.firstEditCall} with ${fmtTok(x.ctxAtFirstEdit)} in context` : 'no Edit/Write';
+    return `${fmtTok(x.firstCallCtx)} at first call · ${edit} · ${Math.round((x.resultCharsBeforeEdit || 0) / 1000)}k chars of tool output before it · ` +
+      `${x.mcpServers ?? '?'} MCP servers, ${x.tools ?? '?'} tools · ${x.repeatedReads ?? 0} repeated reads`;
   }
 
   // Shown only when at least one run has a summary; counts issues the summarizer left open
@@ -401,7 +425,7 @@
     const meta = [
       ['Session ID', rec.sessionId ?? s.messages[0]?.sessionId], ['Result subtype', rec.subtype],
       ['Exit code', rec.exitCode], ['Ended', rec.end && fmtTime(rec.end)], ['Raw stream log', rec.rawLog],
-      ['Tokens', typeof rec.tokens === 'number' ? rec.tokens.toLocaleString() : null], ['Loop decision', rec.decision],
+      ['Tokens', typeof rec.tokens === 'number' ? rec.tokens.toLocaleString() : null], ['Startup', startupText(rec.startup)], ['Loop decision', rec.decision],
       ['Commit', rec.headBefore && rec.headAfter ? (rec.headBefore === rec.headAfter ? `${rec.headAfter} (unchanged)` : `${rec.headBefore} → ${rec.headAfter}`) : null],
       ['Handoff entry', rec.handoffEntry], ['Handoff next', rec.handoffNext], ['Handoff owner', rec.handoffOwner], ['Safe to proceed', rec.handoffSafe]
     ].filter(([, v]) => v != null && v !== '');

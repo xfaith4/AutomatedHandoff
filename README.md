@@ -10,7 +10,7 @@ It runs `claude -p /handoff` headless against a target repository. When a sessio
 Start-Agent <repo>
   └─ Start-AgentLoop.ps1 ──► claude -p /handoff  (session 1)
                                │  PostToolUse hook: context-guard.ps1
-                               │    context ≥ 160k tokens → write rotate.flag,
+                               │    context ≥ 170k tokens → write rotate.flag,
                                │    tell the agent to write the handoff and stop
                                ▼
                              session ends
@@ -78,6 +78,11 @@ Start-Agent . -HandoffFile docs\CURRENT-HANDOFF.md
 | `-HandoffFile` | auto-discovered | Handoff path, relative to the repo. Saved to `.claude/agent-loop.json` for later runs. |
 | `-Tools` | `Bash(pwsh:*)`, `Edit`, `Write`, `Read`, `Glob`, `Grep` | Passed as `--allowedTools`. |
 | `-ExtraArgs` | none | Extra CLI arguments, for example `'--model','opus'`. |
+| `-SoftLimit` | `170000` | Context tokens at which the guard forces a rotation. |
+| `-HardLimit` | `190000` | Past this, the guard repeats its warning on every tool call. Must be above `-SoftLimit`. |
+| `-McpConfig` | none | Load only the MCP servers in this file. Without it, sessions load none. |
+| `-KeepMcp` | off | Load the usual MCP servers. Every session pays their fixed context cost. |
+| `-KeepHygieneInjection` | off | Let the session-hygiene hook inject its own handoff and enforce its own budget too. |
 
 `Start-Agent` also adds `.claude/state/` to the repo's `.gitignore` and warns if no handoff file exists yet.
 
@@ -118,11 +123,39 @@ Progress means the top entry changed and either its `(label next)` moved or a ne
 
 Owner questions do not stop the run unless you pass `-StopOnOwnerItems`. They accumulate in the handoff entries and show in each session's brief in yellow.
 
+## Startup overhead
+
+Each fresh session pays a fixed context cost before it does any work. That is the system prompt, the tool definitions, the MCP servers, and whatever the hooks inject. The loop sets up each session to keep that cost low:
+
+- **No MCP servers by default.** Sessions run with `--strict-mcp-config` and an empty server list, written to `.claude/state/mcp-none.json`. In 16 MyFinancialLedger sessions measured before this change, 36 servers and 89 tools came to about 50k tokens at the first call. Pass `-McpConfig <file>` for the servers a repo really needs, or `-KeepMcp` for the usual set.
+- **One handoff, not two.** The loop sets these for its sessions:
+  - `CLAUDE_HYGIENE_MAP` points the session-hygiene hook at the repo handoff.
+  - `CLAUDE_HYGIENE_HANDOFF_MAX_AGE_DAYS=0` turns off that hook's SessionStart injection, which had put a stale home-folder handoff into every session.
+  - `CLAUDE_HYGIENE_SOFT_TOKENS` and `CLAUDE_HYGIENE_HARD_TOKENS` are set to the loop's limits.
+
+  `-KeepHygieneInjection` restores the hook's own behavior.
+- **More room to work.** The guard rotates at 170k (was 160k). Before this change, sessions reached their first edit at 60k–120k of context, so 160k left too little room for the edits themselves. Auto-compaction is near 200k, and the gap above 190k is kept for the wrap-up.
+- **A pointed rotation message.** It asks the agent to name the exact files and roadmap section the next step needs, so the next session reads only those.
+
+The loop restores every env var it sets, and the console encoding, when it ends. That includes Ctrl+C. `Start-Agent` runs the loop in your shell, and before this fix `AGENT_LOOP_RUN_ID` leaked into later interactive sessions.
+
+Each session's startup is measured from its raw stream log. Only the main chain counts; subagent traffic is skipped.
+
+| Field | Meaning |
+| --- | --- |
+| `firstCallCtx` | Context tokens at the first assistant turn: the fixed overhead. |
+| `firstEditCall`, `ctxAtFirstEdit` | Which tool call made the first `Edit`, `Write`, `MultiEdit` or `NotebookEdit`, and the context at that point. |
+| `resultCharsBeforeEdit` | Characters of tool output the agent read before that edit. |
+| `toolCalls`, `repeatedReads` | Main-chain tool calls, and reads of the same file with the same offset and limit. |
+| `tools`, `mcpServers` | Counts from the init event. |
+
+The brief after each session prints these on a `Startup` line, and the `session` log line carries them as `startup`. The report shows the median in a "Startup context" tile and the per-session values in the detail panel. Compare runs with these numbers before you claim a change helped.
+
 ## Context guard
 
 `context-guard.ps1` runs as a hook in every session:
 
-- **PostToolUse:** reads the transcript tail and adds up the last assistant turn's token usage. At 160k tokens (`-SoftLimit`) it writes `rotate.flag` and blocks with a "finish the step, write the handoff, stop" message. Past 185k tokens (`-HardLimit`) it repeats the warning on every tool call.
+- **PostToolUse:** reads the transcript tail and adds up the last assistant turn's token usage. At 170k tokens (`-SoftLimit`) it writes `rotate.flag` and blocks with a "finish the step, write the handoff, stop" message. Past 190k tokens (`-HardLimit`) it repeats the warning on every tool call. A loop run overrides both limits through `AGENT_LOOP_SOFT_TOKENS` and `AGENT_LOOP_HARD_TOKENS`, because the hook is registered once, at user level.
 - **Stop:** blocks the stop once if the handoff hasn't been written since the session started.
 
 The guard always exits 0 and reports its own errors on stderr, so a fault in the guard never breaks the agent.
@@ -137,8 +170,9 @@ Everything is written under `<repo>/.claude/state/`:
 | `runs/<stamp>-s<n>.jsonl` | Raw stream-json output of each session, next to a snapshot of its handoff. |
 | `agent-loop-report.html` | Standalone report built at the end of every loop. |
 | `<session_id>.json`, `rotate.flag` | Guard state. |
+| `mcp-none.json`, `hygiene-map.json` | The empty MCP config and the hygiene-hook handoff map that the loop passes to each session. |
 
-The report shows per-session outcome (`rotated`, `finished`, `done`, `failed`), turns, cost, duration, permission denials, and the handoff entries each session wrote. An interrupted run shows as incomplete.
+The report shows per-session outcome (`rotated`, `finished`, `done`, `failed`), turns, cost, duration, startup cost, permission denials, and the handoff entries each session wrote. An interrupted run shows as incomplete.
 
 To rebuild a report by hand:
 

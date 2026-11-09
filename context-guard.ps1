@@ -14,10 +14,17 @@
 #>
 param(
     [ValidateSet('PostToolUse', 'Stop')][string]$Event = 'PostToolUse',
-    [int]$SoftLimit = 160000,
-    [int]$HardLimit = 185000,
+    # 170k/190k: sessions start at ~50k of fixed context and ~60-120k by their first edit, so 160k left
+    # too little room to work. Auto-compaction is near 200k; the wrap-up needs 10-20k of that gap.
+    [int]$SoftLimit = 170000,
+    [int]$HardLimit = 190000,
     [string]$HandoffFile = ''   # blank = resolve from .claude/agent-loop.json, then auto-discover
 )
+
+# Start-AgentLoop.ps1 passes its -SoftLimit/-HardLimit this way: the hook is registered once, at user level
+$envSoft = 0; $envHard = 0
+if ([int]::TryParse("$env:AGENT_LOOP_SOFT_TOKENS", [ref]$envSoft) -and $envSoft -gt 0) { $SoftLimit = $envSoft }
+if ([int]::TryParse("$env:AGENT_LOOP_HARD_TOKENS", [ref]$envHard) -and $envHard -gt 0) { $HardLimit = $envHard }
 
 . (Join-Path $PSScriptRoot Resolve-HandoffFile.ps1)
 
@@ -68,7 +75,8 @@ try {
                         decision = 'block'
                         reason   = "CONTEXT ROTATION: ~${k}k tokens in context (limit $([math]::Round($SoftLimit/1000))k). " +
                         "Finish ONLY the current atomic step. Then update $HandoffFile with: goal, what's done, " +
-                        "files touched, decisions + why, open issues, and exact next steps. Then stop. " +
+                        "files touched, decisions + why, open issues, and exact next steps. Name the exact files and the " +
+                        "roadmap section the next step needs, so the next session reads only those. Then stop. " +
                         "Do not start new work - a fresh session will resume via /handoff." +
                         " If the overall task is finished, put 'Status: DONE' on its own line in the handoff."
                     }

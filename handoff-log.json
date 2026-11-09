@@ -121,6 +121,66 @@
       "next": "Build -CommitEachItem / -PullRequest in Start-AgentLoop.ps1 and Start-Agent. Spec: (1) at loop start, if enabled, create and switch to branch agent-loop/<runId> from HEAD (refuse if tree dirty unless -AllowDirty); (2) steer appends \"commit each completed item on the current branch with a conventional message; never touch main\"; (3) reserve 2 sessions of -Max (and the same share of -MaxCost/-MaxTokens): item sessions run to Max-2, then a PR session with prompt \"push the branch and open a PR to main with gh pr create; body = summary of all handoff entries this run plus git log base..HEAD; this PR is the final summary and change request\"; (4) after the PR session, scan the run: failed sessions, tool errors from the raw stream logs (reuse the extraction in Invoke-LoopSummary.ps1), push/gh failures, and handoff entries with Safe to proceed: no. If any, run exactly one repair session with those findings in the prompt: fix, commit, push, gh pr edit the body. (5) Log pr URL, branch, repair findings on loop-end; show in brief, table and report. (6) Add stand-in scenarios: pr-created, repair-triggered, repair-skipped, dirty-tree-refused (Fake-Claude must fake gh or the loop takes -GhPath). Also: a usage-limit wait no longer counts against -Max (owner silent, keep current behavior until asked).",
       "nextLabel": "commit-and-pr",
       "owner": "nothing"
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-07T14:24:58-05:00",
+      "summary": "Answered: until-done command for the LED repo",
+      "did": "No files changed. Gave Ben the until-done command for F:\\Development\\20_Staging\\300PixelLED_2812B: Start-Agent <repo> -UntilDone -Max 20 -MaxCost 60 -RateLimitWait 30. Noted the plain PowerShell profile still has the stale Start-Agent without -UntilDone (VS Code profile is current).",
+      "verified": "Installed Start-AgentLoop.ps1 and the VS Code profile contain UntilDone; Microsoft.PowerShell_profile.ps1 does not. LED repo has docs/CURRENT-HANDOFF.md and ROADMAP.md, clean tree, no agent-loop.json. Nothing run.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; no changes made",
+      "next": "Build the commit-and-pr item (top entry below): run branch at loop start, Max-2 reservation, PR session, failure scan, repair session, starting in Start-AgentLoop.ps1.",
+      "nextLabel": "commit-and-pr",
+      "owner": "Reinstall Start-Agent into Microsoft.PowerShell_profile.ps1 if running outside VS Code; run the until-done command on the LED repo."
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-08T20:23:27-05:00",
+      "summary": "Mapped review.md onto the handoff script, /handoff command and agent loop",
+      "did": "No files changed. Analysis only: review.md items 1-7 mapped to Add-RunHandoffEntry.ps1 (replace snapshot, auto-captured git fields, atomic writes), commands/handoff.md (inject snapshot and drift report via !, single authority, progressive reads, no inherited approvals), and Start-AgentLoop.ps1 (startup-cost metrics). Baseline from 16 MyFinancialLedger loop logs: 10-26 tool calls and 60k-120k context before first Edit/Write; ledger CURRENT-HANDOFF.md is 1084 lines, 98 entries.",
+      "verified": "Baseline computed by parsing runs/*-s*.jsonl tool_use events. No code written or tested.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; nothing changed",
+      "next": "Waiting on Ben to pick the order: step 1 (startup-cost metrics in the loop session log and report) or the approved commit-and-pr item first.",
+      "nextLabel": "review-handoff-plan",
+      "owner": "Choose order: handoff optimization vs commit-and-pr. Approve any later trim of the ledger CURRENT-HANDOFF.md after archive check."
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-08T20:27:01-05:00",
+      "summary": "Measured where loop startup context goes; token-limit recommendation",
+      "did": "No files changed. Ledger loop logs: about 50k tokens of fixed overhead at the first call in every session (89 tools, 36 MCP servers incl. Slack/Gmail/Snowflake, skills list, CLAUDE.md, rules); tool results before the first edit only 71-145k chars (about 18-36k tokens). Model claude-opus-5-5, standard window. Recommended: loop runs with --strict-mcp-config and a minimal MCP config; raise guard to soft 170k / hard 190k and set CLAUDE_HYGIENE_HARD_TOKENS to match in loop runs; log firstCallCtx and ctxAtFirstEdit per session.",
+      "verified": "Parsed 16 runs/*-s*.jsonl init and usage events. Overhead split (MCP vs skills vs system prompt) not measured; needs a one-session A/B run by Ben.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; nothing changed",
+      "next": "If Ben approves: add -StrictMcp (default on) and -McpConfig to Start-AgentLoop.ps1, raise context-guard limits, export CLAUDE_HYGIENE_HARD_TOKENS, add startup metrics to the session log line; extend tests\\Test-AgentLoop.ps1.",
+      "nextLabel": "startup-overhead",
+      "owner": "Approve the startup-overhead changes; then run one Start-Agent session on the ledger to measure firstCallCtx with strict MCP."
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-08T20:34:14-05:00",
+      "summary": "Startup-overhead changes built: no MCP by default, 170k/190k budget, hygiene on repo handoff, startup metrics",
+      "did": "Start-AgentLoop.ps1: new -SoftLimit 170000 -HardLimit 190000 (exported as AGENT_LOOP_SOFT/HARD_TOKENS), --strict-mcp-config with empty .claude/state/mcp-none.json by default (-McpConfig file, -KeepMcp opt-outs), hygiene hook pointed at the repo handoff via .claude/state/hygiene-map.json with CLAUDE_HYGIENE_HANDOFF_MAX_AGE_DAYS=0 (no SessionStart injection) and hygiene soft/hard = loop limits (-KeepHygieneInjection opt-out), Get-StartupMetrics -> session.startup (firstCallCtx, firstEditCall, ctxAtFirstEdit, resultCharsBeforeEdit, toolCalls, repeatedReads, mcpServers, tools; main chain only) printed in the session brief, body wrapped in try/finally restoring all env vars and OutputEncoding (AGENT_LOOP_RUN_ID used to leak into the shell). context-guard.ps1: defaults 170k/190k, env override, rotation message asks for exact files and roadmap section. Install-AgentLoop.ps1: Start-Agent passes -SoftLimit -HardLimit -McpConfig -KeepMcp -KeepHygieneInjection. AgentLoopReport.html: Startup context KPI (medians) and Startup row in session detail. tests: Fake-Claude records args/env per call and has a startup step; Test-AgentLoop has per-scenario checks and 3 new scenarios.",
+      "verified": "Parse of all *.ps1 and tests\\*.ps1: 0 errors. tests\\Test-AgentLoop.ps1: 19 scenarios, 0 failed (18 in full run, startup-defaults after fixing a test-only Count bug). Not verified: live run; whether --strict-mcp-config also drops claude.ai connectors and plugin MCP servers (check mcpServers in the session brief); report HTML not opened in a browser; README.md and CLAUDE.md not yet updated.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; changes are in source only, installed copy unchanged until Ben reinstalls",
+      "next": "Update README.md and CLAUDE.md (new params, startup metrics, hygiene env, 170k/190k, env restore); serve the folder on 127.0.0.1 and check the report renders the Startup KPI against a log with a startup field; then the review.md snapshot work (Add-RunHandoffEntry replace-snapshot, /handoff injection and drift report).",
+      "nextLabel": "startup-overhead-docs",
+      "owner": "Reinstall (pwsh -NoProfile -File <abs>\\Install-AgentLoop.ps1 -SkipHooks -ProfilePath <VS Code profile>, and the plain profile), then run Start-Agent F:\\Development\\20_Staging\\Financial\\MyFinancialLedger -Max 1 and compare the Startup line (baseline ~50k at first call, ~75k at first edit, 36 MCP servers)."
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-08T20:42:01-05:00",
+      "summary": "Startup-overhead docs and report check",
+      "did": "README.md: Startup overhead section, new Start-Agent params, 170k/190k guard, state files. CLAUDE.md: startup-overhead notes, 19 scenarios, 170k/190k. Project memory saved with the repo goal.",
+      "verified": "Report from the startup-defaults stand-in run served on 127.0.0.1: Startup context KPI (30k, first edit at 36k call 4) and the detail row render, no console errors. Scripts unchanged since the 19/19 run. Not verified: a live run, and whether strict MCP drops claude.ai connectors.",
+      "progress": "skipped (-SkipProgress)",
+      "safeToProceed": "yes; all work is uncommitted on main (only the initial commit exists)",
+      "next": "Ben reinstalls and runs Start-Agent MyFinancialLedger -Max 1, then compares the Startup line with the baseline. After that, the review.md snapshot work (Add-RunHandoffEntry snapshot plus atomic write plus prev, /handoff drift injection), or commit-and-pr",
+      "nextLabel": "live-startup-check",
+      "owner": "Reinstall and live check; approve the review.md snapshot work and the ledger handoff trim; decide whether to commit this work"
     }
   ]
 }

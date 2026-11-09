@@ -8,6 +8,9 @@
 #   exit: <int>                    -> process exit code
 #   error: 'rate' | 'generic'      -> emit an error result instead of success
 #   cost, tokens                   -> numbers in the result event
+#   startup: true                  -> emit init with tools/mcp_servers and a main-chain Read, Read (same file),
+#                                     Grep, Edit sequence with usage, plus one subagent tool call to be ignored
+# Every call records its arguments and the loop's env vars in .claude/state/fake-call-<n>.json.
 $ErrorActionPreference = 'Stop'
 $steps = @(Get-Content $env:FAKE_SCENARIO -Raw | ConvertFrom-Json)
 $stateDir = Join-Path (Get-Location) '.claude/state'
@@ -16,9 +19,34 @@ $counterFile = Join-Path $stateDir 'fake-counter'
 $i = if (Test-Path $counterFile) { [int](Get-Content $counterFile) } else { 0 }
 Set-Content $counterFile ($i + 1)
 $s = if ($i -lt $steps.Count) { $steps[$i] } else { $steps[-1] }
-function P($o) { $o | ConvertTo-Json -Compress -Depth 6 }
+function P($o) { $o | ConvertTo-Json -Compress -Depth 8 }
 
-P @{ type = 'system'; subtype = 'init'; session_id = "fake-$($i + 1)"; permissionMode = 'auto' }
+$envSeen = [ordered]@{}
+foreach ($k in 'AGENT_LOOP_SOFT_TOKENS', 'AGENT_LOOP_HARD_TOKENS', 'CLAUDE_HYGIENE_MAP', 'CLAUDE_HYGIENE_HANDOFF_MAX_AGE_DAYS',
+    'CLAUDE_HYGIENE_SOFT_TOKENS', 'CLAUDE_HYGIENE_HARD_TOKENS', 'TK_DISABLE', 'AGENT_LOOP_RUN_ID') {
+    $envSeen[$k] = [Environment]::GetEnvironmentVariable($k)
+}
+@{ args = @($args); env = $envSeen } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $stateDir "fake-call-$($i + 1).json")
+
+if ($s.startup) {
+    P @{ type = 'system'; subtype = 'init'; session_id = "fake-$($i + 1)"; permissionMode = 'auto'
+        tools = @('Read', 'Edit', 'Grep', 'Bash'); mcp_servers = @(@{ name = 'postgresql'; status = 'connected' }) }
+    function Use($ctx, $id, $name, $tool) {
+        P @{ type = 'assistant'; parent_tool_use_id = $null; message = @{ usage = @{ input_tokens = 10; cache_creation_input_tokens = 0; cache_read_input_tokens = $ctx - 10; output_tokens = 50 }
+                content = @(@{ type = 'tool_use'; id = $id; name = $name; input = $tool }) } }
+    }
+    function Res($id, $text) { P @{ type = 'user'; parent_tool_use_id = $null; message = @{ content = @(@{ type = 'tool_result'; tool_use_id = $id; content = $text }) } } }
+    Use 30000 't1' 'Read' @{ file_path = 'C:\repo\src\a.ts' }; Res 't1' ('x' * 1000)
+    # Subagent traffic: must not count as a main-chain call, read or context
+    P @{ type = 'assistant'; parent_tool_use_id = 'task1'; message = @{ usage = @{ input_tokens = 999999 }
+            content = @(@{ type = 'tool_use'; id = 'sub1'; name = 'Edit'; input = @{ file_path = 'x' } }) } }
+    Use 32000 't2' 'Read' @{ file_path = 'c:/repo/src/a.ts' }; Res 't2' @(@{ type = 'text'; text = ('y' * 500) })
+    Use 34000 't3' 'Grep' @{ pattern = 'foo' }; Res 't3' 'hit'
+    Use 36000 't4' 'Edit' @{ file_path = 'C:\repo\src\a.ts' }; Res 't4' 'ok'
+}
+else {
+    P @{ type = 'system'; subtype = 'init'; session_id = "fake-$($i + 1)"; permissionMode = 'auto' }
+}
 P @{ type = 'assistant'; message = @{ content = @(@{ type = 'text'; text = "fake session $($i + 1): $($s.did ?? 'working')" }) } }
 
 if ($s.error) {

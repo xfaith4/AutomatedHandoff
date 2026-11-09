@@ -38,8 +38,23 @@ param(
     [int]$StallSessions = 2,            # until-done: stop after this many finished sessions in a row with no progress
     [switch]$StopOnOwnerItems,          # until-done: also stop when the top entry's Owner line is not "nothing"
     [double]$RateLimitWaitMinutes = 0,  # 0 = stop on a usage-limit result. Otherwise sleep this long and start a new session
-    [int]$MaxRateLimitWaits = 3
+    [int]$MaxRateLimitWaits = 3,
+
+    # Context budget per session. context-guard.ps1 reads it from AGENT_LOOP_SOFT_TOKENS / AGENT_LOOP_HARD_TOKENS.
+    # Auto-compaction is near 200k and the wrap-up (finish the step, write the handoff) needs 10-20k, so 190k is the ceiling.
+    [ValidateRange(50000, 195000)][int]$SoftLimit = 170000,
+    [ValidateRange(50000, 199000)][int]$HardLimit = 190000,
+    # MCP servers are fixed context in every session. Default: --strict-mcp-config with no servers.
+    # -McpConfig loads only the servers in that file; -KeepMcp loads the usual user/project/plugin set.
+    [string]$McpConfig = '',
+    [switch]$KeepMcp,
+    # Default: the session-hygiene hook uses the repo handoff as its handoff (one source of truth, no second Stop block)
+    # and skips its SessionStart injection, because /handoff reads the repo handoff itself. This restores the normal hook.
+    [switch]$KeepHygieneInjection
 )
+if ($SoftLimit -ge $HardLimit) { throw "-SoftLimit ($SoftLimit) must be below -HardLimit ($HardLimit)." }
+if ($McpConfig -and -not (Test-Path -LiteralPath $McpConfig -PathType Leaf)) { throw "-McpConfig file not found: $McpConfig" }
+if ($McpConfig) { $McpConfig = (Resolve-Path -LiteralPath $McpConfig).Path }
 
 # Locate the Claude Code CLI: explicit -> PATH -> common Windows install locations
 if (-not $ClaudePath) {
@@ -84,13 +99,58 @@ if ($UntilDone) {
     Write-Host "Prompt: $Prompt" -ForegroundColor DarkGray
 }
 
+# Start-Agent runs this script in the caller's shell, so every env var set below is put back in the
+# finally block at the end of the file. Before, AGENT_LOOP_RUN_ID outlived the run and tagged later
+# interactive handoff entries with a stale runId.
+$envNames = @('TK_DISABLE', 'AGENT_LOOP_RUN_ID', 'AGENT_LOOP_SESSION', 'AGENT_LOOP_SOFT_TOKENS', 'AGENT_LOOP_HARD_TOKENS',
+    'CLAUDE_HYGIENE_MAP', 'CLAUDE_HYGIENE_HANDOFF_MAX_AGE_DAYS', 'CLAUDE_HYGIENE_SOFT_TOKENS', 'CLAUDE_HYGIENE_HARD_TOKENS')
+$envBackup = @{}
+foreach ($k in $envNames) { $envBackup[$k] = [Environment]::GetEnvironmentVariable($k) }
+$prevOutputEncoding = [Console]::OutputEncoding
+# The body below is not re-indented under this try; the finally at the end of the file restores the shell.
+try {
+
 # tk wraps git/cat/etc. in { ... } so allow-listed commands need a human to approve them; -p has none
 $env:TK_DISABLE = '1'
 # claude writes UTF-8. Decoding it with the console code page (437) logged an en dash as 'ΓÇô'.
-$prevOutputEncoding = [Console]::OutputEncoding
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 # The session-hygiene handoff lives outside the repo; let unattended sessions write it
 $hygieneDir = (Join-Path $HOME '.claude/handoffs') -replace '\\', '/'
+
+# Context budget for context-guard.ps1 (a user-level hook, so it reads the run's limits from the environment)
+$env:AGENT_LOOP_SOFT_TOKENS = "$SoftLimit"
+$env:AGENT_LOOP_HARD_TOKENS = "$HardLimit"
+
+# MCP servers: none by default. The ledger runs loaded 36 (Slack, Gmail, Snowflake, ...) and started every session
+# at ~50k tokens before reading a file.
+$mcpArgs = @()
+$mcpMode = 'default (user, project and plugin servers)'
+if ($McpConfig) {
+    $mcpArgs = @('--strict-mcp-config', '--mcp-config', $McpConfig)
+    $mcpMode = "only $McpConfig"
+}
+elseif (-not $KeepMcp) {
+    $noMcp = Join-Path $stateDir 'mcp-none.json'
+    Set-Content -LiteralPath $noMcp -Value '{ "mcpServers": {} }' -Encoding utf8
+    $mcpArgs = @('--strict-mcp-config', '--mcp-config', $noMcp)
+    $mcpMode = 'none (--strict-mcp-config)'
+}
+Write-Host "MCP servers: $mcpMode" -ForegroundColor DarkGray
+
+# Session-hygiene hook: point it at the repo handoff, match its budget to the guard's, and turn off its
+# SessionStart injection (max age 0 days). Otherwise every session got a second, possibly staler handoff
+# injected, and the hygiene Stop hook asked for a second handoff file at 160k.
+$hygieneMode = 'normal'
+if (-not $KeepHygieneInjection) {
+    $hygieneMap = Join-Path $stateDir 'hygiene-map.json'
+    @{ $ProjectDir = (Join-Path $ProjectDir $HandoffFile) } | ConvertTo-Json | Set-Content -LiteralPath $hygieneMap -Encoding utf8
+    $env:CLAUDE_HYGIENE_MAP = $hygieneMap
+    $env:CLAUDE_HYGIENE_HANDOFF_MAX_AGE_DAYS = '0'
+    $env:CLAUDE_HYGIENE_SOFT_TOKENS = "$SoftLimit"
+    $env:CLAUDE_HYGIENE_HARD_TOKENS = "$HardLimit"
+    $hygieneMode = 'repo handoff, no injection'
+}
+Write-Host ("Context budget: soft {0}k, hard {1}k | hygiene hook: {2}" -f ($SoftLimit / 1000), ($HardLimit / 1000), $hygieneMode) -ForegroundColor DarkGray
 
 # Run log: everything shown in the terminal, as JSONL. AgentLoopReport.html renders it.
 if (-not $LogPath) { $LogPath = Join-Path $stateDir 'agent-loop.log.jsonl' }
@@ -188,6 +248,64 @@ function Format-Tokens([long]$T) {
     return "$T"
 }
 
+function Get-StartupMetrics([string]$Path) {
+    # What a session spent getting up to speed, from its raw stream log. Main chain only: subagent
+    # traffic (parent_tool_use_id set) is not in the main context. Best-effort; never throws.
+    # firstEditCall is the 1-based tool call index of the first Edit/Write (Bash edits such as sed -i don't count).
+    $m = [ordered]@{
+        tools = $null; mcpServers = $null; firstCallCtx = $null; firstEditCall = $null; ctxAtFirstEdit = $null
+        resultCharsBeforeEdit = [long]0; toolCalls = 0; repeatedReads = 0
+    }
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $m }
+    $editTools = 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'
+    $ctx = $null
+    $beforeEdit = @{}
+    $reads = @{}
+    try {
+        foreach ($line in [IO.File]::ReadLines($Path)) {
+            try { $e = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+            if ($e.type -eq 'system' -and $e.subtype -eq 'init') {
+                $m.tools = @($e.tools).Count; $m.mcpServers = @($e.mcp_servers).Count; continue
+            }
+            if ($e.PSObject.Properties['parent_tool_use_id'] -and $e.parent_tool_use_id) { continue }
+            if ($e.type -eq 'assistant') {
+                $u = $e.message.usage
+                if ($u) {
+                    $ctx = [long]$u.input_tokens + [long]$u.cache_creation_input_tokens + [long]$u.cache_read_input_tokens
+                    if ($null -eq $m.firstCallCtx) { $m.firstCallCtx = $ctx }
+                }
+                foreach ($c in @($e.message.content)) {
+                    if ($c.type -ne 'tool_use') { continue }
+                    $m.toolCalls++
+                    if ($c.name -eq 'Read' -and $c.input.file_path) {
+                        $key = ('{0}|{1}|{2}' -f ("$($c.input.file_path)" -replace '\\', '/').ToLower(), $c.input.offset, $c.input.limit)
+                        if ($reads.ContainsKey($key)) { $m.repeatedReads++ } else { $reads[$key] = $true }
+                    }
+                    if ($null -eq $m.firstEditCall) {
+                        if ($c.name -in $editTools) { $m.firstEditCall = $m.toolCalls; $m.ctxAtFirstEdit = $ctx }
+                        else { $beforeEdit[$c.id] = $true }
+                    }
+                }
+            }
+            elseif ($e.type -eq 'user') {
+                foreach ($c in @($e.message.content)) {
+                    if ($c.type -ne 'tool_result' -or -not $beforeEdit.ContainsKey("$($c.tool_use_id)")) { continue }
+                    $m.resultCharsBeforeEdit += if ($c.content -is [string]) { $c.content.Length }
+                    else { [long](@($c.content) | ForEach-Object { "$($_.text)".Length } | Measure-Object -Sum).Sum }
+                }
+            }
+        }
+    }
+    catch { Write-Verbose "startup metrics: $($_.Exception.Message)" }
+    return $m
+}
+
+function Format-Startup($S) {
+    if ($null -eq $S.firstCallCtx) { return 'no usage recorded' }
+    $edit = if ($S.firstEditCall) { "first edit at call $($S.firstEditCall), $(Format-Tokens $S.ctxAtFirstEdit)" } else { 'no Edit/Write' }
+    return '{0} at first call | {1} | {2} MCP servers, {3} tools | {4} repeated reads' -f (Format-Tokens $S.firstCallCtx), $edit, $S.mcpServers, $S.tools, $S.repeatedReads
+}
+
 function Limit-Text([string]$S, [int]$Max = 150) {
     $S = "$S" -replace '\s+', ' '
     if ($S.Length -le $Max) { return $S }
@@ -205,6 +323,7 @@ Write-LoopLog 'loop-start' ([ordered]@{
         untilDone = [bool]$UntilDone; maxCostUsd = $MaxCostUsd; maxTokens = $MaxTokens
         stallSessions = $StallSessions; maxConsecutiveFailures = $MaxConsecutiveFailures
         rateLimitWaitMinutes = $RateLimitWaitMinutes
+        softLimit = $SoftLimit; hardLimit = $HardLimit; mcp = $mcpMode; hygieneHook = $hygieneMode
     })
 $sessions = [System.Collections.Generic.List[object]]::new()
 $stopReason = 'max-sessions'
@@ -229,7 +348,7 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
     $sessionId = $null
     $result = $null
     $denials = @()
-    & $ClaudePath -p $Prompt --permission-mode $PermissionMode --output-format stream-json --verbose --add-dir $hygieneDir @ExtraArgs |
+    & $ClaudePath -p $Prompt --permission-mode $PermissionMode --output-format stream-json --verbose @mcpArgs --add-dir $hygieneDir @ExtraArgs |
         Tee-Object -FilePath $log |
         ForEach-Object {
             # A non-JSON line throws even under SilentlyContinue and would leave the previous $e in place
@@ -263,6 +382,7 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
     $headAfter = Get-GitHead
     $brief = Get-HandoffBrief $handoff
     $tokens = Get-ResultTokens $result
+    $startup = Get-StartupMetrics $log
     $errText = if ($result) { "$($result.result) $(@($result.errors) -join ' ')" } else { '' }
     $rateLimited = $result -and ($result.is_error -or $result.subtype -ne 'success') -and $errText -match $rateLimitRx
 
@@ -342,6 +462,7 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
         handoffNext  = $brief.next
         handoffOwner = $brief.owner
         handoffSafe  = $brief.safe
+        startup      = $startup
     }
     Write-LoopLog 'session' $row
     $sessions.Add([pscustomobject]$row)
@@ -364,6 +485,7 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
     else { Write-Host '  Handoff   (none found)' -ForegroundColor Yellow }
     $commitNote = if ($committed) { "$headBefore -> $headAfter (new commit)" } elseif ($headAfter) { "$headAfter (unchanged)" } else { 'not a git repo' }
     Write-Host ("  {0,-9} {1}" -f 'Commit', $commitNote)
+    Write-Host ("  {0,-9} {1}" -f 'Startup', (Format-Startup $startup)) -ForegroundColor DarkGray
     $budget = 'sessions {0}/{1} | cost ${2:N2}{3} | tokens {4}{5}' -f $n, $MaxSessions, $totalCost,
     ($MaxCostUsd -gt 0 ? ('/${0:N2}' -f $MaxCostUsd) : ''), (Format-Tokens $totalTokens),
     ($MaxTokens -gt 0 ? "/$(Format-Tokens $MaxTokens)" : '')
@@ -412,3 +534,10 @@ try {
     Write-Host "Report: $($report.FullName)" -ForegroundColor DarkGray
 }
 catch { Write-Warning "Report not written: $($_.Exception.Message)" }
+
+}
+finally {
+    # Leave the caller's shell as it was (Start-Agent runs this in-process), also after Ctrl+C
+    foreach ($k in $envNames) { [Environment]::SetEnvironmentVariable($k, $envBackup[$k]) }
+    [Console]::OutputEncoding = $prevOutputEncoding
+}
