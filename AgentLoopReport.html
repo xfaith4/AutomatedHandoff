@@ -456,6 +456,8 @@
       ['Exit code', rec.exitCode], ['Ended', rec.end && fmtTime(rec.end)], ['Raw stream log', rec.rawLog],
       ['Tokens', typeof rec.tokens === 'number' ? rec.tokens.toLocaleString() : null], ['Startup', startupText(rec.startup)],
       ['Session brief', briefLink(rec.brief)], ['Loop decision', rec.decision],
+      // B3: rotateReason = 'boundary' (item closed above -BoundaryLimit) or 'context' (soft limit); null unless rotated
+      ['Rotation reason', rec.rotateReason === 'boundary' ? 'item boundary (handoff rewritten above the boundary limit)' : rec.rotateReason === 'context' ? 'context limit' : null],
       ['Commit', rec.headBefore && rec.headAfter ? (rec.headBefore === rec.headAfter ? `${rec.headAfter} (unchanged)` : `${rec.headBefore} → ${rec.headAfter}`) : null],
       ['Handoff entry', rec.handoffEntry], ['Handoff next', rec.handoffNext], ['Handoff owner', rec.handoffOwner], ['Safe to proceed', rec.handoffSafe],
       ['Handoff lint', lintText(rec.handoffLint)]

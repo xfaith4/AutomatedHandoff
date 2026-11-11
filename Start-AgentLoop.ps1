@@ -44,6 +44,9 @@ param(
     # Auto-compaction is near 200k and the wrap-up (finish the step, write the handoff) needs 10-20k, so 190k is the ceiling.
     [ValidateRange(50000, 195000)][int]$SoftLimit = 170000,
     [ValidateRange(50000, 199000)][int]$HardLimit = 190000,
+    # B3: once a session has rewritten the handoff (an item closed) and context is at or above this, the guard
+    # rotates so the next item starts fresh. Read from AGENT_LOOP_BOUNDARY_TOKENS. 0 = off. Must be below -SoftLimit.
+    [ValidateRange(0, 195000)][int]$BoundaryLimit = 100000,
     # MCP servers are fixed context in every session. Default: --strict-mcp-config with no servers.
     # -McpConfig loads only the servers in that file; -KeepMcp loads the usual user/project/plugin set.
     [string]$McpConfig = '',
@@ -58,6 +61,7 @@ param(
     [switch]$NoBrief
 )
 if ($SoftLimit -ge $HardLimit) { throw "-SoftLimit ($SoftLimit) must be below -HardLimit ($HardLimit)." }
+if ($BoundaryLimit -ge $SoftLimit) { throw "-BoundaryLimit ($BoundaryLimit) must be below -SoftLimit ($SoftLimit); 0 turns it off." }
 if ($McpConfig -and -not (Test-Path -LiteralPath $McpConfig -PathType Leaf)) { throw "-McpConfig file not found: $McpConfig" }
 if ($McpConfig) { $McpConfig = (Resolve-Path -LiteralPath $McpConfig).Path }
 
@@ -107,7 +111,7 @@ if ($UntilDone) {
 # Start-Agent runs this script in the caller's shell, so every env var set below is put back in the
 # finally block at the end of the file. Before, AGENT_LOOP_RUN_ID outlived the run and tagged later
 # interactive handoff entries with a stale runId.
-$envNames = @('TK_DISABLE', 'AGENT_LOOP_RUN_ID', 'AGENT_LOOP_SESSION', 'AGENT_LOOP_SOFT_TOKENS', 'AGENT_LOOP_HARD_TOKENS',
+$envNames = @('TK_DISABLE', 'AGENT_LOOP_RUN_ID', 'AGENT_LOOP_SESSION', 'AGENT_LOOP_SOFT_TOKENS', 'AGENT_LOOP_HARD_TOKENS', 'AGENT_LOOP_BOUNDARY_TOKENS',
     'CLAUDE_HYGIENE_MAP', 'CLAUDE_HYGIENE_HANDOFF_MAX_AGE_DAYS', 'CLAUDE_HYGIENE_SOFT_TOKENS', 'CLAUDE_HYGIENE_HARD_TOKENS')
 $envBackup = @{}
 foreach ($k in $envNames) { $envBackup[$k] = [Environment]::GetEnvironmentVariable($k) }
@@ -125,6 +129,7 @@ $hygieneDir = (Join-Path $HOME '.claude/handoffs') -replace '\\', '/'
 # Context budget for context-guard.ps1 (a user-level hook, so it reads the run's limits from the environment)
 $env:AGENT_LOOP_SOFT_TOKENS = "$SoftLimit"
 $env:AGENT_LOOP_HARD_TOKENS = "$HardLimit"
+$env:AGENT_LOOP_BOUNDARY_TOKENS = "$BoundaryLimit"
 
 # MCP servers: none by default. The ledger runs loaded 36 (Slack, Gmail, Snowflake, ...) and started every session
 # at ~50k tokens before reading a file.
@@ -155,7 +160,8 @@ if (-not $KeepHygieneInjection) {
     $env:CLAUDE_HYGIENE_HARD_TOKENS = "$HardLimit"
     $hygieneMode = 'repo handoff, no injection'
 }
-Write-Host ("Context budget: soft {0}k, hard {1}k | hygiene hook: {2}" -f ($SoftLimit / 1000), ($HardLimit / 1000), $hygieneMode) -ForegroundColor DarkGray
+Write-Host ("Context budget: soft {0}k, hard {1}k, item boundary {2} | hygiene hook: {3}" -f ($SoftLimit / 1000), ($HardLimit / 1000),
+    ($BoundaryLimit -gt 0 ? "$($BoundaryLimit / 1000)k" : 'off'), $hygieneMode) -ForegroundColor DarkGray
 
 # Run log: everything shown in the terminal, as JSONL. AgentLoopReport.html renders it.
 if (-not $LogPath) { $LogPath = Join-Path $stateDir 'agent-loop.log.jsonl' }
@@ -429,7 +435,7 @@ Write-LoopLog 'loop-start' ([ordered]@{
         untilDone = [bool]$UntilDone; maxCostUsd = $MaxCostUsd; maxTokens = $MaxTokens
         stallSessions = $StallSessions; maxConsecutiveFailures = $MaxConsecutiveFailures
         rateLimitWaitMinutes = $RateLimitWaitMinutes
-        softLimit = $SoftLimit; hardLimit = $HardLimit; mcp = $mcpMode; hygieneHook = $hygieneMode
+        softLimit = $SoftLimit; hardLimit = $HardLimit; boundaryLimit = $BoundaryLimit; mcp = $mcpMode; hygieneHook = $hygieneMode
     })
 $sessions = [System.Collections.Generic.List[object]]::new()
 $stopReason = 'max-sessions'
@@ -529,6 +535,14 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
     elseif (Test-HandoffDone $brief) { 'done' }
     elseif (Test-Path $flag) { 'rotated' }
     else { 'finished' }
+    # B3: the guard writes "<reason> <sessionId>" to rotate.flag; boundary = item closed above -BoundaryLimit
+    $rotateReason = $null
+    if ($outcome -eq 'rotated') {
+        $flagText = ''
+        try { $flagText = "$(Get-Content -LiteralPath $flag -Raw)".Trim() }
+        catch { Write-Warning "rotate.flag unreadable, reason taken as context: $($_.Exception.Message)" }
+        $rotateReason = if ($flagText -match '^boundary\b') { 'boundary' } else { 'context' }
+    }
 
     $totalCost += [double]($result.total_cost_usd ?? 0)
     $totalTokens += $tokens
@@ -538,11 +552,14 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
     $sameLabel = $brief.label -and ($brief.label -eq $prevBrief.label)
     $committed = $headBefore -and $headAfter -and ($headBefore -ne $headAfter)
     $progressed = $newEntry -and (-not $sameLabel -or $committed)
-    if ($outcome -eq 'finished') { if ($progressed) { $stallCount = 0 } else { $stallCount++ } }
+    # A boundary rotation (B3) ends an item just like a finished session, so it gets the same stall and blocked
+    # checks; otherwise a session that rewrites the handoff above the boundary without progress never stalls.
+    $itemEnded = $outcome -eq 'finished' -or $rotateReason -eq 'boundary'
+    if ($itemEnded) { if ($progressed) { $stallCount = 0 } else { $stallCount++ } }
     elseif ($outcome -in 'done', 'rotated') { $stallCount = 0 }
     $prevBrief = $brief
 
-    $blocked = $UntilDone -and $outcome -eq 'finished' -and (
+    $blocked = $UntilDone -and $itemEnded -and (
         ($brief.safe -match '^\s*no\b') -or ($StopOnOwnerItems -and -not (Test-OwnerNothing $brief.owner)))
 
     # Decide: keep going or stop, and say why in one line
@@ -564,7 +581,13 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
             else { $decision = "session failed (exit $exit, result event: $([bool]$result)) - stopping" }
         }
         'done' { $decision = 'handoff says DONE - stopping' }
-        'rotated' { $consecutiveFailures = 0; $go = $true; $decision = 'context limit hit - rotating to a fresh session' }
+        'rotated' {
+            $consecutiveFailures = 0
+            if ($rotateReason -ne 'boundary') { $go = $true; $decision = 'context limit hit - rotating to a fresh session' }
+            elseif ($blocked) { $outcome = 'blocked'; $decision = 'item closed at the boundary, but the handoff says it cannot proceed - stopping for the owner' }
+            elseif ($UntilDone -and $stallCount -ge $StallSessions) { $outcome = 'stalled'; $decision = "item boundary with no progress in $stallCount sessions - stopping" }
+            else { $go = $true; $decision = 'item closed above the boundary limit - rotating to a fresh session' }
+        }
         'finished' {
             $consecutiveFailures = 0
             if (-not $UntilDone) { $decision = 'session ended under the limit - task finished' }
@@ -585,6 +608,7 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
         end          = $ended.ToString('o')
         durationSec  = [math]::Round(($ended - $started).TotalSeconds, 1)
         outcome      = $outcome
+        rotateReason = $rotateReason
         success      = $outcome -notin 'failed', 'rate-limited' -and $result.subtype -eq 'success' -and -not $result.is_error
         subtype      = $result.subtype
         exitCode     = $exit

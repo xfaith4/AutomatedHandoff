@@ -10,6 +10,9 @@
                assistant message's usage block. At >= SoftLimit it writes rotate.flag
                and tells Claude to finish the current step, write the handoff, and stop.
                It warns once, then again on every tool call past HardLimit.
+               B3: inside a loop run, once the handoff was rewritten this session and context is at or above
+               BoundaryLimit (below SoftLimit), it writes rotate.flag ("boundary") once and tells Claude to stop,
+               so the next roadmap item starts in a fresh session instead of on top of the last one's context.
   Stop:        blocks the stop once if current-handoff.md wasn't written this session, and once more
                if the written top entry fails Test-HandoffEntry (B2). Only inside a loop run (AGENT_LOOP_RUN_ID set by Start-AgentLoop.ps1): the hook is
                registered at user level, so it also fires in interactive sessions, which it must not block.
@@ -20,6 +23,8 @@ param(
     # too little room to work. Auto-compaction is near 200k; the wrap-up needs 10-20k of that gap.
     [int]$SoftLimit = 170000,
     [int]$HardLimit = 190000,
+    # B3: rotate at the item boundary (handoff written this session) once context reaches this. 0 = off.
+    [int]$BoundaryLimit = 100000,
     [string]$HandoffFile = ''   # blank = resolve from .claude/agent-loop.json, then auto-discover
 )
 
@@ -27,6 +32,8 @@ param(
 $envSoft = 0; $envHard = 0
 if ([int]::TryParse("$env:AGENT_LOOP_SOFT_TOKENS", [ref]$envSoft) -and $envSoft -gt 0) { $SoftLimit = $envSoft }
 if ([int]::TryParse("$env:AGENT_LOOP_HARD_TOKENS", [ref]$envHard) -and $envHard -gt 0) { $HardLimit = $envHard }
+$envBoundary = 0   # 0 is a valid value here: -BoundaryLimit 0 turns boundary rotation off
+if ([int]::TryParse("$env:AGENT_LOOP_BOUNDARY_TOKENS", [ref]$envBoundary) -and $envBoundary -ge 0) { $BoundaryLimit = $envBoundary }
 
 . (Join-Path $PSScriptRoot Resolve-HandoffFile.ps1)
 
@@ -69,7 +76,7 @@ try {
             $tokens = Get-ContextTokens $payload.transcript_path
             $state.lastTokens = $tokens
             if ($tokens -ge $SoftLimit) {
-                Set-Content -Path $flag -Value $payload.session_id   # tells the outer loop to relaunch
+                Set-Content -Path $flag -Value "context $($payload.session_id)"   # tells the outer loop to relaunch; first word = reason
                 if (-not $state.warned -or $tokens -ge $HardLimit) {
                     $state.warned = $true
                     $k = [math]::Round($tokens / 1000)
@@ -82,6 +89,21 @@ try {
                         "Do not start new work - a fresh session will resume via /handoff." +
                         " If the overall task is finished, put 'Status: DONE' on its own line in the handoff."
                     }
+                }
+            }
+            elseif ($env:AGENT_LOOP_RUN_ID -and $BoundaryLimit -gt 0 -and $tokens -ge $BoundaryLimit -and $handoffFresh -and
+                -not $state.boundaryWarned) {
+                # B3: the handoff was rewritten this session, so an item just closed. Starting the next one on top of
+                # this context costs more per call than a fresh session that reads the handoff. Once per session.
+                Set-Content -Path $flag -Value "boundary $($payload.session_id)"
+                $state | Add-Member -NotePropertyName boundaryWarned -NotePropertyValue $true -Force
+                $k = [math]::Round($tokens / 1000)
+                $out = @{
+                    decision = 'block'
+                    reason   = "ITEM BOUNDARY: you rewrote $HandoffFile this session and context is ~${k}k tokens " +
+                    "(boundary $([math]::Round($BoundaryLimit/1000))k). Do not start the next item. If this item's work " +
+                    "is not committed yet, commit it; make sure the top entry of $HandoffFile names the next step. " +
+                    "Then stop. A fresh session will pick up the next item via /handoff."
                 }
             }
         }

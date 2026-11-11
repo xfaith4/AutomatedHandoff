@@ -5,7 +5,7 @@
 #   guardBlocked: true             -> write the guard's per-session state with lintBlocked (B2)
 #   noEntry: true                  -> write nothing (simulates an agent that forgot the handoff)
 #   commit: true                   -> git commit a touched file
-#   rotate: true                   -> write .claude/state/rotate.flag (guard forced a rotation)
+#   rotate: true | 'boundary'      -> write .claude/state/rotate.flag (guard forced a rotation; 'boundary' = B3 reason)
 #   exit: <int>                    -> process exit code
 #   error: 'rate' | 'generic'      -> emit an error result instead of success
 #   cost, tokens                   -> numbers in the result event
@@ -23,7 +23,7 @@ $s = if ($i -lt $steps.Count) { $steps[$i] } else { $steps[-1] }
 function P($o) { $o | ConvertTo-Json -Compress -Depth 8 }
 
 $envSeen = [ordered]@{}
-foreach ($k in 'AGENT_LOOP_SOFT_TOKENS', 'AGENT_LOOP_HARD_TOKENS', 'CLAUDE_HYGIENE_MAP', 'CLAUDE_HYGIENE_HANDOFF_MAX_AGE_DAYS',
+foreach ($k in 'AGENT_LOOP_SOFT_TOKENS', 'AGENT_LOOP_HARD_TOKENS', 'AGENT_LOOP_BOUNDARY_TOKENS', 'CLAUDE_HYGIENE_MAP', 'CLAUDE_HYGIENE_HANDOFF_MAX_AGE_DAYS',
     'CLAUDE_HYGIENE_SOFT_TOKENS', 'CLAUDE_HYGIENE_HARD_TOKENS', 'TK_DISABLE', 'AGENT_LOOP_RUN_ID') {
     $envSeen[$k] = [Environment]::GetEnvironmentVariable($k)
 }
@@ -69,7 +69,7 @@ if ($s.commit) {
     Add-Content (Join-Path (Get-Location) 'work.txt') "step $($i + 1)"
     git add -A 2>$null | Out-Null; git -c user.name=t -c user.email=t@t commit -q -m "step $($i + 1)" 2>$null | Out-Null
 }
-if ($s.rotate) { Set-Content (Join-Path $stateDir 'rotate.flag') 'x' }
+if ($s.rotate) { Set-Content (Join-Path $stateDir 'rotate.flag') ('boundary' -eq $s.rotate ? "boundary fake-$($i + 1)" : 'x') }
 if ($s.guardBlocked) {   # what context-guard.ps1 leaves in its per-session state after a lint block
     @{ startedTicks = 0; warned = $false; lastTokens = 0; lintBlocked = $true } | ConvertTo-Json -Compress |
         Set-Content (Join-Path $stateDir "fake-$($i + 1).json")

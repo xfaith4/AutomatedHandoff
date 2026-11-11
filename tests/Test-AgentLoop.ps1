@@ -58,9 +58,37 @@ $briefRoadmap = @'
 
 $scenarios = [ordered]@{
     'default-finished'  = @{ args = @{}; steps = @(@{ label = 'A1'; commit = $true }); stop = 'finished'; sessions = 1 }
-    'default-rotate'    = @{ args = @{}; steps = @(@{ label = 'A1'; rotate = $true }, @{ label = 'DONE'; next = 'DONE: all items closed' }); stop = 'done'; sessions = 2 }
+    'default-rotate'    = @{ args = @{}; steps = @(@{ label = 'A1'; rotate = $true }, @{ label = 'DONE'; next = 'DONE: all items closed' }); stop = 'done'; sessions = 2
+        check = {
+            param($lines, $dir)
+            $s = @($lines | Where-Object type -eq 'session')
+            @(
+                if ($s[0].rotateReason -ne 'context') { "s1 rotateReason '$($s[0].rotateReason)', expected context" }
+                if ($null -ne $s[1].rotateReason) { "s2 rotateReason '$($s[1].rotateReason)' on a session that did not rotate" }
+            )
+        }
+    }
+    # B3: the guard's "boundary" flag reason reaches the session line and the decision; -BoundaryLimit reaches the env
+    'boundary-rotate'   = @{ args = @{ BoundaryLimit = 90000 }; steps = @(@{ label = 'A1'; rotate = 'boundary'; commit = $true }, @{ label = 'DONE'; next = 'DONE: all items closed' }); stop = 'done'; sessions = 2
+        check = {
+            param($lines, $dir)
+            $s1 = @($lines | Where-Object type -eq 'session')[0]
+            $start = $lines | Where-Object type -eq 'loop-start' | Select-Object -First 1
+            $call = Get-Content (Join-Path $dir '.claude/state/fake-call-1.json') -Raw | ConvertFrom-Json
+            @(
+                if ($s1.rotateReason -ne 'boundary') { "s1 rotateReason '$($s1.rotateReason)', expected boundary" }
+                if ($s1.decision -notmatch 'boundary') { "s1 decision does not mention the boundary: $($s1.decision)" }
+                if ($start.boundaryLimit -ne 90000) { "loop-start boundaryLimit $($start.boundaryLimit)" }
+                if ($call.env.AGENT_LOOP_BOUNDARY_TOKENS -ne '90000') { "guard env AGENT_LOOP_BOUNDARY_TOKENS '$($call.env.AGENT_LOOP_BOUNDARY_TOKENS)'" }
+                if ($env:AGENT_LOOP_BOUNDARY_TOKENS) { 'AGENT_LOOP_BOUNDARY_TOKENS leaked into the shell' }
+            )
+        }
+    }
     'untildone-happy'   = @{ args = @{ UntilDone = $true }; steps = @(@{ label = 'A1'; commit = $true }, @{ label = 'A2'; commit = $true }, @{ label = 'DONE'; next = 'DONE: roadmap complete' }); stop = 'done'; sessions = 3 }
     'untildone-stall'   = @{ args = @{ UntilDone = $true }; steps = @(@{ label = 'A1' }, @{ label = 'A1' }, @{ label = 'A1' }, @{ label = 'A1' }); stop = 'stalled'; sessions = 3 }
+    # B3: a boundary rotation ends an item, so until-done applies the same stall and blocked checks to it
+    'boundary-stall'    = @{ args = @{ UntilDone = $true }; steps = @(@{ label = 'A1'; rotate = 'boundary' }, @{ label = 'A1'; rotate = 'boundary' }, @{ label = 'A1'; rotate = 'boundary' }, @{ label = 'A1'; rotate = 'boundary' }); stop = 'stalled'; sessions = 3 }
+    'boundary-blocked'  = @{ args = @{ UntilDone = $true }; steps = @(@{ label = 'A1'; rotate = 'boundary'; safe = 'no; needs the owner' }, @{ label = 'DONE'; next = 'DONE' }); stop = 'blocked'; sessions = 1 }
     'untildone-commit-same-label' = @{ args = @{ UntilDone = $true; StallSessions = 2 }; steps = @(@{ label = 'A1'; commit = $true }, @{ label = 'A1'; commit = $true }, @{ label = 'A1'; commit = $true }, @{ label = 'DONE'; next = 'DONE' }); stop = 'done'; sessions = 4 }
     'untildone-noentry' = @{ args = @{ UntilDone = $true }; steps = @(@{ noEntry = $true }, @{ noEntry = $true }, @{ noEntry = $true }); stop = 'stalled'; sessions = 2 }
     'untildone-blocked' = @{ args = @{ UntilDone = $true }; steps = @(@{ label = 'A1'; safe = 'no; waiting on five owner decisions'; owner = 'Decide the fuse value' }); stop = 'blocked'; sessions = 1 }
@@ -101,7 +129,9 @@ $scenarios = [ordered]@{
                 $b = Test-SessionBrief $lines $dir 1
                 $b.problems
                 if ($b.text -and $b.text -notmatch '(?s)# Loop brief \(session 1\).*## Git.*## Handoff top entry') { 'brief missing its sections' }
-                foreach ($k in 'AGENT_LOOP_SOFT_TOKENS', 'CLAUDE_HYGIENE_MAP', 'CLAUDE_HYGIENE_HANDOFF_MAX_AGE_DAYS', 'AGENT_LOOP_RUN_ID', 'TK_DISABLE') {
+                $c1 = Get-Content (Join-Path $dir '.claude/state/fake-call-1.json') -Raw | ConvertFrom-Json
+                if ($c1.env.AGENT_LOOP_BOUNDARY_TOKENS -ne '100000') { "default AGENT_LOOP_BOUNDARY_TOKENS '$($c1.env.AGENT_LOOP_BOUNDARY_TOKENS)', expected 100000" }
+                foreach ($k in 'AGENT_LOOP_SOFT_TOKENS', 'AGENT_LOOP_BOUNDARY_TOKENS', 'CLAUDE_HYGIENE_MAP', 'CLAUDE_HYGIENE_HANDOFF_MAX_AGE_DAYS', 'AGENT_LOOP_RUN_ID', 'TK_DISABLE') {
                     if ([Environment]::GetEnvironmentVariable($k)) { "$k leaked into the caller's shell" }
                 }
             )
@@ -250,7 +280,9 @@ $results = foreach ($name in $scenarios.Keys) {
 }
 # Direct guard checks (no loop): the Stop branch blocks a stale handoff only inside a loop run (A3), and
 # blocks once on a fresh handoff that fails Test-HandoffEntry (B2). A case with `handoff` text writes that file
-# after a guard state whose startedTicks = 0, so the handoff counts as written this session.
+# after a guard state whose startedTicks = 0, so the handoff counts as written this session (`stale` puts
+# startedTicks after the write instead). PostToolUse cases (B3) pass `tokens`, written as a one-line transcript,
+# and check rotate.flag (`flag` = regex its text must match; no `flag` = no file) and the state's boundaryWarned.
 $guard = Join-Path (Split-Path $here -Parent) 'context-guard.ps1'
 $hGood = "# T`n`n## 2026-01-02 — good (B2 next)`n`n- **Verified:** pwsh -File tests/x.ps1: ok`n- **Safe to proceed:** yes`n- **Next:** B2 in context-guard.ps1`n"
 $hBad = "# T`n`n## 2026-01-02 — bad (B2 next)`n`n- **Verified:** looked fine`n- **Safe to proceed:** probably`n- **Next:** carry on`n"
@@ -264,6 +296,17 @@ $guardCases = [ordered]@{
     'guard-lint-once'           = @{ runId = 'test-run'; handoff = $hBad; lintBlocked = $true; expectBlock = $false; expectLintBlocked = $true }
     'guard-lint-hygiene-shape'  = @{ runId = 'test-run'; handoff = "# Handoff: x`n`n## Status`n`ndone`n"; expectBlock = $false }
     'guard-lint-outside-loop'   = @{ runId = $null; handoff = $hBad; expectBlock = $false }
+    'guard-boundary-fires'      = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; tokens = 120000; expectBlock = $true
+        reason = '^ITEM BOUNDARY: .*~120k tokens \(boundary 100k\)'; flag = '^boundary guard-test$'; expectBoundaryWarned = $true }
+    'guard-boundary-under'      = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; tokens = 90000; expectBlock = $false }
+    'guard-boundary-stale'      = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; stale = $true; tokens = 120000; expectBlock = $false }
+    'guard-boundary-once'       = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; boundaryWarned = $true; tokens = 130000; expectBlock = $false; expectBoundaryWarned = $true }
+    'guard-boundary-outside'    = @{ event = 'PostToolUse'; runId = $null; handoff = $hGood; tokens = 120000; expectBlock = $false }
+    'guard-boundary-off'        = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; boundaryEnv = '0'; tokens = 120000; expectBlock = $false }
+    'guard-boundary-env'        = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; boundaryEnv = '50000'; tokens = 60000; expectBlock = $true
+        reason = '\(boundary 50k\)'; flag = '^boundary '; expectBoundaryWarned = $true }
+    'guard-boundary-soft-wins'  = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; tokens = 175000; expectBlock = $true
+        reason = '^CONTEXT ROTATION'; flag = '^context guard-test$' }
 }
 $results = @($results) + @(foreach ($name in $guardCases.Keys) {
     if ($Only -and $name -ne $Only) { continue }
@@ -274,30 +317,54 @@ $results = @($results) + @(foreach ($name in $guardCases.Keys) {
     $stateFile = Join-Path $dir '.claude/state/guard-test.json'
     if ($null -ne $gc.handoff) {
         New-Item -ItemType Directory -Force -Path (Split-Path $stateFile) | Out-Null
-        @{ startedTicks = 0; warned = $false; lastTokens = 0; lintBlocked = [bool]$gc.lintBlocked } | ConvertTo-Json -Compress | Set-Content $stateFile
         [IO.File]::WriteAllText((Join-Path $dir 'current-handoff.md'), $gc.handoff)
+        $started = if ($gc.stale) { [DateTime]::UtcNow.AddMinutes(5).Ticks } else { 0 }
+        @{ startedTicks = $started; warned = $false; lastTokens = 0; lintBlocked = [bool]$gc.lintBlocked; boundaryWarned = [bool]$gc.boundaryWarned } |
+            ConvertTo-Json -Compress | Set-Content $stateFile
     }
-    $payload = @{ session_id = 'guard-test'; cwd = $dir; stop_hook_active = [bool]$gc.stopActive } | ConvertTo-Json -Compress
-    $saved = @{ AGENT_LOOP_RUN_ID = $env:AGENT_LOOP_RUN_ID; CLAUDE_PROJECT_DIR = $env:CLAUDE_PROJECT_DIR }
+    $transcript = Join-Path $dir 'transcript.jsonl'
+    if ($gc.tokens) {
+        @{ type = 'assistant'; message = @{ usage = @{ input_tokens = 10; cache_creation_input_tokens = 0; cache_read_input_tokens = $gc.tokens - 60; output_tokens = 50 } } } |
+            ConvertTo-Json -Compress -Depth 4 | Set-Content $transcript
+    }
+    $event = $gc.event ?? 'Stop'
+    $payload = @{ session_id = 'guard-test'; cwd = $dir; stop_hook_active = [bool]$gc.stopActive; transcript_path = $transcript } | ConvertTo-Json -Compress
+    $saved = @{ AGENT_LOOP_RUN_ID = $env:AGENT_LOOP_RUN_ID; CLAUDE_PROJECT_DIR = $env:CLAUDE_PROJECT_DIR; AGENT_LOOP_BOUNDARY_TOKENS = $env:AGENT_LOOP_BOUNDARY_TOKENS }
     try {
-        $env:AGENT_LOOP_RUN_ID = $gc.runId; $env:CLAUDE_PROJECT_DIR = $dir
-        $out = ($payload | pwsh -NoProfile -File $guard -Event Stop 2>&1 | Out-String).Trim()
+        $env:AGENT_LOOP_RUN_ID = $gc.runId; $env:CLAUDE_PROJECT_DIR = $dir; $env:AGENT_LOOP_BOUNDARY_TOKENS = $gc.boundaryEnv
+        $out = ($payload | pwsh -NoProfile -File $guard -Event $event 2>&1 | Out-String).Trim()
     }
     finally { foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) } }
     $blocked = $out -match '"decision"\s*:\s*"block"'
     $reason = if ($blocked) { try { ($out | ConvertFrom-Json).reason } catch { "unparsable: $out" } }
-    $lintBlocked = (Test-Path $stateFile) -and [bool](Get-Content $stateFile -Raw | ConvertFrom-Json).lintBlocked
+    $gstate = if (Test-Path $stateFile) { Get-Content $stateFile -Raw | ConvertFrom-Json }
+    $lintBlocked = [bool]$gstate.lintBlocked
+    $boundaryWarned = [bool]$gstate.boundaryWarned
+    $flagPath = Join-Path $dir '.claude/state/rotate.flag'
+    $flagText = if (Test-Path $flagPath) { (Get-Content $flagPath -Raw).Trim() }
     $problems = @(
         if ($blocked -ne $gc.expectBlock) { "blocked=$blocked, output: $out" }
         elseif (-not $gc.expectBlock -and $out) { "unexpected output: $out" }
         elseif ($gc.reason -and $reason -notmatch $gc.reason) { "reason did not match /$($gc.reason)/: $reason" }
         if ($lintBlocked -ne [bool]$gc.expectLintBlocked) { "state lintBlocked=$lintBlocked, expected $([bool]$gc.expectLintBlocked)" }
+        if ($boundaryWarned -ne [bool]$gc.expectBoundaryWarned) { "state boundaryWarned=$boundaryWarned, expected $([bool]$gc.expectBoundaryWarned)" }
+        if ($gc.flag -and "$flagText" -notmatch $gc.flag) { "rotate.flag '$flagText' did not match /$($gc.flag)/" }
+        elseif (-not $gc.flag -and $null -ne $flagText) { "unexpected rotate.flag '$flagText'" }
     )
     [pscustomobject]@{
         scenario = $name; expectStop = $(if ($gc.expectBlock) { 'block' } else { 'allow' }); stop = $(if ($blocked) { 'block' } else { 'allow' })
         expectSessions = 0; sessions = 0; pass = ($problems.Count -eq 0); problems = $problems -join '; '
     }
 })
+# B3: -BoundaryLimit at or above -SoftLimit is rejected before any session starts
+if (-not $Only -or $Only -eq 'boundary-invalid') {
+    $msg = try { & $loop -ProjectDir $work -ClaudePath $fake -NoSummary -BoundaryLimit 170000 *>&1 | Out-Null; 'no error' } catch { $_.Exception.Message }
+    $ok = $msg -match 'must be below -SoftLimit'
+    $results = @($results) + [pscustomobject]@{
+        scenario = 'boundary-invalid'; expectStop = 'throw'; stop = $(if ($ok) { 'throw' } else { 'none' })
+        expectSessions = 0; sessions = 0; pass = $ok; problems = $(if ($ok) { '' } else { $msg })
+    }
+}
 # Direct Test-HandoffEntry checks (B1): exact problem lists for each handoff shape.
 . (Join-Path (Split-Path $here -Parent) 'Resolve-HandoffFile.ps1')
 $hdr = "# Test — Current Handoff`n> Active operational context only. Newest entry first.`n`n"

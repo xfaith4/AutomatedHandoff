@@ -130,7 +130,7 @@ _Exactly one row above should show `active`. If a second release needs to become
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
 - [x] [[B2]] The `Stop` branch of `context-guard.ps1` blocks once with the `Test-HandoffEntry` problems as the reason; the loop logs them as `session.handoffLint`. (depends: B1, A3) *(completed: 2026-11-11)*
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
-- [ ] [[B3]] Rotate at the item boundary: on `PostToolUse`, if the handoff was rewritten this session and context is above `AGENT_LOOP_BOUNDARY_TOKENS` (new `-BoundaryLimit`, default 100000), write `rotate.flag` with reason `boundary` and tell the agent to stop.
+- [x] [[B3]] Rotate at the item boundary: on `PostToolUse`, if the handoff was rewritten this session and context is above `AGENT_LOOP_BOUNDARY_TOKENS` (new `-BoundaryLimit`, default 100000), write `rotate.flag` with reason `boundary` and tell the agent to stop. *(completed: 2026-11-11)*
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
 - [ ] [[B4]] `rotate.flag` holds a JSON reason (`soft-limit`, `hard-limit`, `boundary`); the `session` line logs `rotateReason` and the report shows it in the session table. (depends: B3)
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`

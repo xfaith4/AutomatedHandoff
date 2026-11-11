@@ -80,6 +80,7 @@ function Start-Agent {
         [string[]]`$ExtraArgs = @(),
         [int]`$SoftLimit = 170000,    # context-guard rotation point per session
         [int]`$HardLimit = 190000,
+        [int]`$BoundaryLimit = 100000, # rotate once an item closes (handoff rewritten) above this; 0 = off
         [string]`$McpConfig,          # load only the MCP servers in this file (default: none)
         [switch]`$KeepMcp,            # load the usual MCP servers (costs fixed context in every session)
         [switch]`$KeepHygieneInjection, # let the session-hygiene hook inject its own handoff too
@@ -115,7 +116,7 @@ function Start-Agent {
     `$loopArgs = @{
         ProjectDir = `$path; MaxSessions = `$Max; PermissionMode = `$Mode; Prompt = `$Prompt; ExtraArgs = `$args2
         UntilDone = `$UntilDone; MaxCostUsd = `$MaxCost; MaxTokens = `$MaxTokens; RateLimitWaitMinutes = `$RateLimitWait
-        SoftLimit = `$SoftLimit; HardLimit = `$HardLimit; KeepMcp = `$KeepMcp; KeepHygieneInjection = `$KeepHygieneInjection
+        SoftLimit = `$SoftLimit; HardLimit = `$HardLimit; BoundaryLimit = `$BoundaryLimit; KeepMcp = `$KeepMcp; KeepHygieneInjection = `$KeepHygieneInjection
         NoBrief = `$NoBrief; BriefMaxChars = `$BriefMaxChars
     }
     if (`$McpConfig) { `$loopArgs.McpConfig = (Resolve-Path `$McpConfig -ErrorAction Stop).Path }
