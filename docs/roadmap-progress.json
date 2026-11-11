@@ -1,0 +1,230 @@
+{
+  "schemaVersion": 2,
+  "repository": "AutomatedHandoff",
+  "snapshots": [
+    {
+      "recordedAt": "2026-11-10T21:43:27-05:00",
+      "commit": "90b1c9d",
+      "dirty": true,
+      "roadmap": "ROADMAP.md",
+      "parseState": "pending",
+      "status": "available",
+      "reason": null,
+      "basis": "checklist",
+      "marks": null,
+      "items": {
+        "completed": 0,
+        "open": 22,
+        "total": 22,
+        "percentComplete": 0.0
+      },
+      "releases": {
+        "total": 4,
+        "complete": 0
+      },
+      "phases": {
+        "total": 0,
+        "complete": 0,
+        "open": 0
+      },
+      "weight": {
+        "basis": "open-items",
+        "remaining": 22.0,
+        "unestimatedOpenPhases": 0
+      },
+      "nextItem": "Implement retry backoff in Poll-Provider.ps1"
+    },
+    {
+      "recordedAt": "2026-11-11T00:49:58-05:00",
+      "commit": "90b1c9d",
+      "dirty": true,
+      "roadmap": "ROADMAP.md",
+      "parseState": "pending",
+      "status": "available",
+      "reason": null,
+      "basis": "checklist",
+      "marks": null,
+      "items": {
+        "completed": 2,
+        "open": 20,
+        "total": 22,
+        "percentComplete": 9.1
+      },
+      "releases": {
+        "total": 4,
+        "complete": 0
+      },
+      "phases": {
+        "total": 0,
+        "complete": 0,
+        "open": 0
+      },
+      "weight": {
+        "basis": "open-items",
+        "remaining": 20.0,
+        "unestimatedOpenPhases": 0
+      },
+      "nextItem": "Implement retry backoff in Poll-Provider.ps1"
+    },
+    {
+      "recordedAt": "2026-11-11T05:51:04-05:00",
+      "commit": "90b1c9d",
+      "dirty": true,
+      "roadmap": "ROADMAP.md",
+      "parseState": "pending",
+      "status": "available",
+      "reason": null,
+      "basis": "checklist",
+      "marks": null,
+      "items": {
+        "completed": 3,
+        "open": 19,
+        "total": 22,
+        "percentComplete": 13.6
+      },
+      "releases": {
+        "total": 4,
+        "complete": 0
+      },
+      "phases": {
+        "total": 0,
+        "complete": 0,
+        "open": 0
+      },
+      "weight": {
+        "basis": "open-items",
+        "remaining": 19.0,
+        "unestimatedOpenPhases": 0
+      },
+      "nextItem": "Implement retry backoff in Poll-Provider.ps1"
+    },
+    {
+      "recordedAt": "2026-11-11T06:10:14-05:00",
+      "commit": "90b1c9d",
+      "dirty": true,
+      "roadmap": "ROADMAP.md",
+      "parseState": "pending",
+      "status": "available",
+      "reason": null,
+      "basis": "checklist",
+      "marks": null,
+      "items": {
+        "completed": 4,
+        "open": 18,
+        "total": 22,
+        "percentComplete": 18.2
+      },
+      "releases": {
+        "total": 4,
+        "complete": 0
+      },
+      "phases": {
+        "total": 0,
+        "complete": 0,
+        "open": 0
+      },
+      "weight": {
+        "basis": "open-items",
+        "remaining": 18.0,
+        "unestimatedOpenPhases": 0
+      },
+      "nextItem": "Implement retry backoff in Poll-Provider.ps1"
+    },
+    {
+      "recordedAt": "2026-11-11T06:23:23-05:00",
+      "commit": "90b1c9d",
+      "dirty": true,
+      "roadmap": "ROADMAP.md",
+      "parseState": "pending",
+      "status": "available",
+      "reason": null,
+      "basis": "checklist",
+      "marks": null,
+      "items": {
+        "completed": 5,
+        "open": 17,
+        "total": 22,
+        "percentComplete": 22.7
+      },
+      "releases": {
+        "total": 4,
+        "complete": 0
+      },
+      "phases": {
+        "total": 0,
+        "complete": 0,
+        "open": 0
+      },
+      "weight": {
+        "basis": "open-items",
+        "remaining": 17.0,
+        "unestimatedOpenPhases": 0
+      },
+      "nextItem": "Implement retry backoff in Poll-Provider.ps1"
+    },
+    {
+      "recordedAt": "2026-11-11T06:43:37-05:00",
+      "commit": "90b1c9d",
+      "dirty": true,
+      "roadmap": "ROADMAP.md",
+      "parseState": "pending",
+      "status": "available",
+      "reason": null,
+      "basis": "checklist",
+      "marks": null,
+      "items": {
+        "completed": 6,
+        "open": 16,
+        "total": 22,
+        "percentComplete": 27.3
+      },
+      "releases": {
+        "total": 4,
+        "complete": 0
+      },
+      "phases": {
+        "total": 0,
+        "complete": 0,
+        "open": 0
+      },
+      "weight": {
+        "basis": "open-items",
+        "remaining": 16.0,
+        "unestimatedOpenPhases": 0
+      },
+      "nextItem": "Implement retry backoff in Poll-Provider.ps1"
+    },
+    {
+      "recordedAt": "2026-11-11T07:03:20-05:00",
+      "commit": "90b1c9d",
+      "dirty": true,
+      "roadmap": "ROADMAP.md",
+      "parseState": "pending",
+      "status": "available",
+      "reason": null,
+      "basis": "checklist",
+      "marks": null,
+      "items": {
+        "completed": 7,
+        "open": 16,
+        "total": 23,
+        "percentComplete": 30.4
+      },
+      "releases": {
+        "total": 4,
+        "complete": 1
+      },
+      "phases": {
+        "total": 0,
+        "complete": 0,
+        "open": 0
+      },
+      "weight": {
+        "basis": "open-items",
+        "remaining": 16.0,
+        "unestimatedOpenPhases": 0
+      },
+      "nextItem": "Implement retry backoff in Poll-Provider.ps1"
+    }
+  ]
+}

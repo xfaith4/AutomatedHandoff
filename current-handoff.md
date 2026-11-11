@@ -2,6 +2,96 @@
 
 > Active operational context only. Newest entry first.
 
+## 2026-11-11 — A7 recorded from live -NoBrief run 20261111-064504; X2 multi-result logging bug found (B1 next)
+
+- **Did:** ROADMAP.md: A7 stamped [x] with numbers; strict-MCP known issue marked answered (mcpServers 0); new X2 [non-blocker]. A7 no-brief (item C.6a): firstCallCtx 47900, firstEditCall 30, ctxAtFirstEdit 94176. A1 with brief (item C.5): 47976 / 20 / 84905. Counting sed -i edits: call 15 vs 25. The brief added no measurable first-call context and came with the earlier first edit; n=1 on different items. X2: the A7 session had two result events (background task re-woke it); the loop keeps only the last, so it logged 4 turns and 446k tokens instead of 46 turns and about 3.8M; cost is cumulative and right.
+- **Verified:** Session line read from the MyFinancialLedger log (brief null, no brief file written, so -NoBrief honored); raw stream parsed for both runs (result events, usage per result, edit-like tool calls); Invoke-RoadmapValidation -FailOnError exit 0, score 100, warnings R011 x2 (pre-existing) and R012 (0.1 all items done but still active). Not verified: report browser smoke test from the 0.1 validation plan.
+- **Progress:** Roadmap progress appended: 7/23 items done, phases 0/0, 16 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; all work uncommitted, no failing checks
+- **Next:** Close Release 0.1: serve MyFinancialLedger .claude/state on 127.0.0.1 and confirm agent-loop-report.html shows the cache ratio and the brief link with no console errors, then mark 0.1 done and activate 0.2 (B1). X2 fix can go first; it affects -MaxTokens.
+- **Owner:** Approve closing 0.1 and activating 0.2; decide on .gitignore and untracking .claude/state; approve D1/D2; commit decision
+
+## 2026-11-11 — A1 recorded from live run 20261111-062509; Start-Agent -NoBrief passthrough (A7 next)
+
+- **Did:** ROADMAP.md: A1 stamped [x] with numbers; A7 note says A1 already carried the brief, so A7 is the -NoBrief counterpart (check line updated). Install-AgentLoop.ps1: Start-Agent gains -NoBrief and -BriefMaxChars passthrough. CLAUDE.md Start-Agent bullet updated. A1 numbers (MyFinancialLedger run 20261111-062509, finished, 50 turns, $2.17, brief 1767 chars): firstCallCtx 47976, firstCallCacheRead 16444 (34%), firstEditCall 20, ctxAtFirstEdit 84905, mcpServers 0; old baseline ~50k / call 21 / ~75k / 36; 11-08 runs had firstEditCall 30 and 68, ctxAtFirstEdit 120k and 161k.
+- **Verified:** Logged session.startup and session.brief read from the MyFinancialLedger log; sandboxed install (-ToolsDir/-ProfilePath in scratch, stub loop) shows Start-Agent passes NoBrief=False/4000 by default and True/900 when set; profile and Install-AgentLoop.ps1 parse 0 errors; tests/Test-AgentLoop.ps1 24 scenarios 0 failed; Invoke-RoadmapValidation -FailOnError exit 0. Not verified: the real profile reinstall. Noted: Get-StartupMetrics returns all nulls silently on a file still open for writing (harmless in the loop, which reads after the session ends).
+- **Progress:** Roadmap progress appended: 6/22 items done, phases 0/0, 16 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; all work uncommitted, no failing checks
+- **Next:** A7: Ben reinstalls both profiles, then runs Start-Agent F:\Development\20_Staging\Financial\MyFinancialLedger -Max 1 -NoBrief; compare firstEditCall/ctxAtFirstEdit with A1 and record the item each run worked on. Release 0.2 (B1) is planned, not active.
+- **Owner:** Reinstall both profiles and run A7 -NoBrief; decide on .gitignore and untracking .claude/state; approve D1/D2; commit decision
+
+## 2026-11-11 — A6 brief stand-in scenarios (A7 next)
+
+- **Did:** tests/Test-AgentLoop.ps1: new Test-SessionBrief helper (checks --append-system-prompt-file arg, file name, brief.path/sha/chars against the file bytes, cap); scenarios brief-injected (2 sessions, seeded ROADMAP.md; s2 brief carries s1 entry, commit and roadmap item A1, not S0), brief-capped (-BriefMaxChars 600: exact length, truncation marker, roadmap cut), brief-optout (-NoBrief: no arg, no brief files, brief key null, strict MCP still on); optional per-scenario setup scriptblock; startup-defaults reuses the helper. ROADMAP.md A6 stamped [x]; CLAUDE.md test section updated (22 scenarios).
+- **Verified:** pwsh -NoProfile -File tests/Test-AgentLoop.ps1: 24 scenarios, 0 failed (brief-injected failed once on a wrong clean-tree expectation in the test, fixed). Parse of Test-AgentLoop.ps1: 0 errors. Invoke-RoadmapValidation -FailOnError: exit 0 (INFO only). Not verified: live run with the brief (A7, needs reinstall).
+- **Progress:** Roadmap progress appended: 5/22 items done, phases 0/0, 17 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; all work uncommitted, no failing checks
+- **Next:** A7: live -Max 1 run on MyFinancialLedger with the brief, after Ben reinstalls; record firstEditCall and ctxAtFirstEdit next to A1. A1 numbers also need Bens live run. Candidate non-blocker: Start-Agent should create .gitignore when missing.
+- **Owner:** Reinstall both profiles; run A1 then A7 live on MyFinancialLedger; decide on .gitignore and untracking .claude/state; approve D1/D2; commit decision
+
+## 2026-11-11 — Review of live run 20261111-055243 report (A6 next)
+
+- **Did:** No code changes. Reviewed .claude/state/agent-loop-report.html in a browser (127.0.0.1, no console errors) and the log. Findings: installed copy (00:39) predates A4, so the run sent no brief; mcpServers 0 answers the strict-MCP question; first call 46k with 36% cache hit; repo has no .gitignore so .claude/state is tracked (Start-Agent only appends to an existing .gitignore); session Tokens 1.72M is cumulative billed tokens, not context.
+- **Verified:** Browser render of the report and session detail; grep of installed Start-AgentLoop.ps1 (no New-SessionBrief); git ls-files .claude shows tracked state files. Not verified: brief in a live run.
+- **Progress:** Roadmap progress refreshed (no change): 4/22 items done, phases 0/0, 18 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; all work uncommitted
+- **Next:** A6: brief-injected and brief-optout stand-in scenarios. Owner first: reinstall so live runs carry the brief. Candidate non-blocker: Start-Agent should create .gitignore when missing.
+- **Owner:** Reinstall both profiles; run A1 on MyFinancialLedger; decide on .gitignore and untracking .claude/state; approve D1/D2; commit decision
+
+## 2026-11-11 — A5 brief logged on the session line and linked in the report (A6 next)
+
+- **Did:** Start-AgentLoop.ps1: session line gets brief {chars, sha (SHA-256 of the file bytes), path (absolute)}, null with -NoBrief or a failed build, reset each iteration. AgentLoopReport.html: Session brief row in the session detail links the file as file:/// (scheme fixed, never from the log) with chars and short sha. tests/Test-AgentLoop.ps1: startup-defaults checks brief.path equals the passed file and sha/chars match it; startup-optout checks brief is null; the suite now clears inherited AGENT_LOOP_*/CLAUDE_HYGIENE_*/TK_DISABLE so it passes inside a loop session (it failed 2 env checks before). ROADMAP.md A5 checked; CLAUDE.md updated. All uncommitted.
+- **Verified:** Parse *.ps1 and tests/*.ps1: 0 errors. tests/Test-AgentLoop.ps1: 21 scenarios, 0 failed. Logged brief field inspected (624 chars, sha, path). New-AgentLoopReport on the test log: brief embedded. node --check on the report script ok; fileHref tested on a Windows path with space and #. Roadmap validation L3: exit 0, score 100, 2 pre-existing R011 warnings. Not verified: report opened in a browser, installed copy, live run.
+- **Progress:** Roadmap progress appended: 4/22 items done, phases 0/0, 18 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; all work uncommitted, inactive until reinstall
+- **Next:** A6: stand-in scenarios brief-injected and brief-optout (args recorded by Fake-Claude.ps1 plus the brief log fields); much of it is already asserted in startup-defaults/startup-optout, so A6 can be dedicated scenarios that move those checks. A1 still waits on Ben.
+- **Owner:** Reinstall into both profiles and run A1 live; approve D1/D2; decide on committing
+
+## 2026-11-11 — A4 New-SessionBrief pre-session brief (A5 next)
+
+- **Did:** Start-AgentLoop.ps1: New-SessionBrief, Get-RoadmapItem, Invoke-GitLines; params -BriefMaxChars (4000), -RoadmapFile (ROADMAP.md), -NoBrief; each session writes runs/<stamp>-s<n>-brief.md (branch/HEAD, commits since previous session start, git status, handoff top entry, roadmap item for the label) and passes --append-system-prompt-file (file form, not inline, so newlines and quotes survive Windows arg passing). tests/Test-AgentLoop.ps1: startup-defaults asserts the brief arg and sections, startup-optout uses -NoBrief and asserts no brief. ROADMAP.md A4 checked with the file-form note; CLAUDE.md documents it. All uncommitted.
+- **Verified:** Parse of *.ps1 and tests/*.ps1: 0 errors. tests/Test-AgentLoop.ps1: 21 scenarios, 0 failed. Inspected a stand-in session-2 brief and recorded args. Ran New-SessionBrief on this repo: A4 roadmap item extracted, 1200-char cap truncates with marker. Roadmap validation L3: exit 0, score 100, 2 pre-existing R011 warnings. Not verified: real claude.exe accepting --append-system-prompt-file in -p mode (listed in --help), installed copy, live run.
+- **Progress:** Roadmap progress appended: 3/22 items done, phases 0/0, 19 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; all work uncommitted, inactive until reinstall
+- **Next:** A5: log brief.chars, brief.sha and the brief path on the session line; link it in the report session detail. A1 still waits on Ben.
+- **Owner:** Reinstall into both profiles and run A1 live; approve D1/D2; decide on committing
+
+## 2026-11-11 — ROADMAP A1 owner commands corrected (A4 next)
+
+- **Did:** ROADMAP.md A1: replaced the Start-AgentLoop ... -Max 1 command (not on PATH; -Max ambiguous for the script) with the exact sequence: install into the VS Code profile and the PowerShell profile by absolute path, dot-source the profile, then Start-Agent MyFinancialLedger -Max 1. Added firstCallCacheRead to the metrics to record.
+- **Verified:** Both profiles define only Start-Agent (grep). Invoke-RoadmapValidation L3 -FailOnError: exit 0, score 100, 0 errors, 2 pre-existing warnings. Commands not run here.
+- **Progress:** Roadmap progress refreshed (no change): 2/22 items done, phases 0/0, 20 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; uncommitted
+- **Next:** A4: New-SessionBrief in Start-AgentLoop.ps1. A1 still waits on Ben.
+- **Owner:** Run the four A1 commands in ROADMAP.md; approve D1/D2; decide on committing
+
+## 2026-11-11 — A2 split first-call cache metrics and A3 loop-only Stop guard (A4 next)
+
+- **Did:** Start-AgentLoop.ps1 Get-StartupMetrics adds firstCallCacheRead/firstCallCacheCreation, Format-Startup prints cache hit %; AgentLoopReport.html Startup tile and detail row show the first-call cache-hit ratio (older logs without the split still render); context-guard.ps1 Stop branch blocks only when AGENT_LOOP_RUN_ID is set; tests/Fake-Claude.ps1 first call now has 6000 cache creation; tests/Test-AgentLoop.ps1 checks the split and adds guard-stop-outside-loop and guard-stop-in-loop; ROADMAP.md A2 and A3 checked; CLAUDE.md updated. All uncommitted.
+- **Verified:** Parse of *.ps1 and tests/*.ps1: 0 errors. tests/Test-AgentLoop.ps1: 21 scenarios, 0 failed. node --check on the report script: ok; startupText run on sample records with and without the split. Invoke-RoadmapValidation L3 -FailOnError: exit 0, score 100, 0 errors, 2 warnings (pre-existing R011). Not verified: installed copy (needs reinstall), live run, that claude -p passes AGENT_LOOP_RUN_ID through to hooks, report opened in a browser.
+- **Progress:** Roadmap progress appended: 2/22 items done, phases 0/0, 20 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; all work uncommitted, A2/A3 inactive until reinstall
+- **Next:** A4: New-SessionBrief in Start-AgentLoop.ps1 (brief from Get-HandoffBrief, git state, roadmap section; --append-system-prompt, -BriefMaxChars 4000, -NoBrief). A1 still waits on Ben.
+- **Owner:** Reinstall (Install-AgentLoop.ps1 -SkipHooks into both profiles) and run A1 live; approve D1/D2; decide whether to commit ROADMAP.md and this work
+
+## 2026-11-10 — ROADMAP.md created from the improvement proposals (A1 next)
+
+- **Did:** New ROADMAP.md (roadmap-contract template): Release 0.1 active (A1 live baseline, A2 split cache metrics, A3 Stop guard loop-only, A4-A7 loop-built brief and logging), 0.2 handoff lint + boundary rotation + warm-cache repair, 0.3 tests between sessions, 0.4 review.md snapshot + commit-and-pr. CLAUDE.md: roadmap pointer and handoff command without -SkipProgress.
+- **Verified:** Invoke-RoadmapValidation.ps1 -MinimumMaturity L3 -FailOnError: exit 0, score 100, L4, 0 errors, 2 warnings (R011 Active release pointer and detail heading; skipped because template rule 1 forbids restating active in the header). Validator does not parse ## Slice headings, so releases use 0.x; template comment examples got sample check lines to clear R020. No code changed, tests not rerun.
+- **Progress:** Roadmap progress appended: 0/22 items done, phases 0/0, 22 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; ROADMAP.md and CLAUDE.md uncommitted
+- **Next:** A1: Ben reinstalls and runs Start-Agent MyFinancialLedger -Max 1 for a baseline; meanwhile A2 and A3 can be built with stand-in tests
+- **Owner:** Run A1 live; approve D1/D2; decide whether to commit ROADMAP.md
+
+## 2026-11-10 — Improvement review of the rotation loop (proposals only) (live-startup-check next)
+
+- **Did:** No code changes. Proposed: (1) loop-built pre-session brief via --append-system-prompt (git facts, top entry, roadmap section; Get-HandoffBrief already parses it but only prints), (2) rotate at item boundary when handoff written and ctx > ~100k, (3) Stop-hook lint of handoff entry quality, (4) run repo tests between sessions and feed results to next brief, (5) cache-warm --resume repair when handoff missing; minor: split cache_read vs cache_creation in startup metrics, gate Stop guard on env var, cheaper model for repair sessions.
+- **Verified:** Read Start-AgentLoop.ps1 and context-guard.ps1 to confirm brief is not injected and cache tokens are summed. Nothing built or tested.
+- **Progress:** skipped (-SkipProgress)
+- **Safe to proceed:** yes; no files changed besides this entry
+- **Next:** Ben live run (Start-Agent MyFinancialLedger -Max 1) for a fresh baseline, then build proposals 1 and 3 with stand-in tests
+- **Owner:** Pick which proposals to build; reinstall and live check still pending
+
 ## 2026-11-08 — Startup-overhead docs and report check (live-startup-check next)
 
 - **Did:** README.md: Startup overhead section, new Start-Agent params, 170k/190k guard, state files. CLAUDE.md: startup-overhead notes, 19 scenarios, 170k/190k. Project memory saved with the repo goal.
