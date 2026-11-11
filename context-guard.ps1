@@ -10,8 +10,8 @@
                assistant message's usage block. At >= SoftLimit it writes rotate.flag
                and tells Claude to finish the current step, write the handoff, and stop.
                It warns once, then again on every tool call past HardLimit.
-  Stop:        blocks the stop once if current-handoff.md wasn't written this session.
-               Only inside a loop run (AGENT_LOOP_RUN_ID set by Start-AgentLoop.ps1): the hook is
+  Stop:        blocks the stop once if current-handoff.md wasn't written this session, and once more
+               if the written top entry fails Test-HandoffEntry (B2). Only inside a loop run (AGENT_LOOP_RUN_ID set by Start-AgentLoop.ps1): the hook is
                registered at user level, so it also fires in interactive sessions, which it must not block.
 #>
 param(
@@ -86,8 +86,27 @@ try {
             }
         }
         'Stop' {
-            if ($env:AGENT_LOOP_RUN_ID -and -not $handoffFresh -and -not $payload.stop_hook_active) {
-                $out = @{ decision = 'block'; reason = "Rule: update $HandoffFile before ending this session." }
+            if (-not $env:AGENT_LOOP_RUN_ID) { break }
+            if (-not $handoffFresh) {
+                if (-not $payload.stop_hook_active) {
+                    $out = @{ decision = 'block'; reason = "Rule: update $HandoffFile before ending this session." }
+                }
+                break
+            }
+            # B2: a fresh handoff must pass the lint. Blocks at most once per session (state.lintBlocked),
+            # so it also catches an entry written after the stale-handoff block (stop_hook_active is then true).
+            # A handoff with no dated entry (session-hygiene shape) has nothing to lint and is left alone.
+            $problems = @(Test-HandoffEntry $handoff)
+            $unlintable = $problems.Count -eq 1 -and $problems[0] -like 'no top entry*'
+            if ($problems.Count -and -not $unlintable -and -not $state.lintBlocked) {
+                $state | Add-Member -NotePropertyName lintBlocked -NotePropertyValue $true -Force
+                $state | Add-Member -NotePropertyName lintProblems -NotePropertyValue $problems -Force
+                $out = @{
+                    decision = 'block'
+                    reason   = "HANDOFF CHECK: the top entry of $HandoffFile is not specific enough for the next session: " +
+                    ($problems -join '; ') + '. Fix those fields in that entry (Next: a file, command or item ID; ' +
+                    'Verified: the commands you ran and their results; Safe to proceed: starts with yes or no), then stop.'
+                }
             }
         }
     }

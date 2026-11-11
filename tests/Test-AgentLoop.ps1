@@ -195,6 +195,23 @@ $scenarios = [ordered]@{
             )
         }
     }
+    # B2: every session line carries handoffLint { pass, problems, guardBlocked } for the handoff it left
+    'lint-logged'       = @{ args = @{}
+        steps = @(@{ label = 'A1'; rotate = $true; verified = 'pwsh -NoProfile -File tests/x.ps1: ok' },
+            @{ label = 'DONE'; next = 'keep going'; guardBlocked = $true }); stop = 'done'; sessions = 2
+        check = {
+            param($lines, $dir)
+            $sl = @($lines | Where-Object type -eq 'session')
+            $l1 = $sl[0].handoffLint; $l2 = $sl[1].handoffLint
+            $want2 = 'Next names no file, command or item ID|Verified names no command'
+            @(
+                if (-not $l1) { 's1: no handoffLint' }
+                elseif (-not $l1.pass -or @($l1.problems).Count -or $l1.guardBlocked) { "s1: expected a clean pass, got $($l1 | ConvertTo-Json -Compress)" }
+                if (-not $l2) { 's2: no handoffLint' }
+                elseif ($l2.pass -or (@($l2.problems) -join '|') -cne $want2 -or -not $l2.guardBlocked) { "s2: expected 2 problems and guardBlocked, got $($l2 | ConvertTo-Json -Compress)" }
+            )
+        }
+    }
 }
 
 $results = foreach ($name in $scenarios.Keys) {
@@ -231,19 +248,36 @@ $results = foreach ($name in $scenarios.Keys) {
     }
     finally { Pop-Location }
 }
-# Direct guard checks (no loop): the Stop branch blocks a stale handoff only inside a loop run.
+# Direct guard checks (no loop): the Stop branch blocks a stale handoff only inside a loop run (A3), and
+# blocks once on a fresh handoff that fails Test-HandoffEntry (B2). A case with `handoff` text writes that file
+# after a guard state whose startedTicks = 0, so the handoff counts as written this session.
 $guard = Join-Path (Split-Path $here -Parent) 'context-guard.ps1'
+$hGood = "# T`n`n## 2026-01-02 — good (B2 next)`n`n- **Verified:** pwsh -File tests/x.ps1: ok`n- **Safe to proceed:** yes`n- **Next:** B2 in context-guard.ps1`n"
+$hBad = "# T`n`n## 2026-01-02 — bad (B2 next)`n`n- **Verified:** looked fine`n- **Safe to proceed:** probably`n- **Next:** carry on`n"
 $guardCases = [ordered]@{
-    'guard-stop-outside-loop' = @{ runId = $null; expectBlock = $false }
-    'guard-stop-in-loop'      = @{ runId = 'test-run'; expectBlock = $true }
+    'guard-stop-outside-loop'   = @{ runId = $null; expectBlock = $false }
+    'guard-stop-in-loop'        = @{ runId = 'test-run'; expectBlock = $true; reason = '^Rule: update' }
+    'guard-lint-pass'           = @{ runId = 'test-run'; handoff = $hGood; expectBlock = $false }
+    'guard-lint-fail'           = @{ runId = 'test-run'; handoff = $hBad; expectBlock = $true; expectLintBlocked = $true
+        reason = '^HANDOFF CHECK: .*Next names no file, command or item ID; Verified names no command; Safe to proceed does not start with yes or no' }
+    'guard-lint-after-stale'    = @{ runId = 'test-run'; handoff = $hBad; stopActive = $true; expectBlock = $true; expectLintBlocked = $true; reason = '^HANDOFF CHECK' }
+    'guard-lint-once'           = @{ runId = 'test-run'; handoff = $hBad; lintBlocked = $true; expectBlock = $false; expectLintBlocked = $true }
+    'guard-lint-hygiene-shape'  = @{ runId = 'test-run'; handoff = "# Handoff: x`n`n## Status`n`ndone`n"; expectBlock = $false }
+    'guard-lint-outside-loop'   = @{ runId = $null; handoff = $hBad; expectBlock = $false }
 }
 $results = @($results) + @(foreach ($name in $guardCases.Keys) {
     if ($Only -and $name -ne $Only) { continue }
     $gc = $guardCases[$name]
     $dir = Join-Path $work $name
     if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
-    New-Item -ItemType Directory -Force -Path $dir | Out-Null   # no handoff file, so it is never fresh
-    $payload = @{ session_id = 'guard-test'; cwd = $dir; stop_hook_active = $false } | ConvertTo-Json -Compress
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null   # without `handoff`, no handoff file, so it is never fresh
+    $stateFile = Join-Path $dir '.claude/state/guard-test.json'
+    if ($null -ne $gc.handoff) {
+        New-Item -ItemType Directory -Force -Path (Split-Path $stateFile) | Out-Null
+        @{ startedTicks = 0; warned = $false; lastTokens = 0; lintBlocked = [bool]$gc.lintBlocked } | ConvertTo-Json -Compress | Set-Content $stateFile
+        [IO.File]::WriteAllText((Join-Path $dir 'current-handoff.md'), $gc.handoff)
+    }
+    $payload = @{ session_id = 'guard-test'; cwd = $dir; stop_hook_active = [bool]$gc.stopActive } | ConvertTo-Json -Compress
     $saved = @{ AGENT_LOOP_RUN_ID = $env:AGENT_LOOP_RUN_ID; CLAUDE_PROJECT_DIR = $env:CLAUDE_PROJECT_DIR }
     try {
         $env:AGENT_LOOP_RUN_ID = $gc.runId; $env:CLAUDE_PROJECT_DIR = $dir
@@ -251,9 +285,13 @@ $results = @($results) + @(foreach ($name in $guardCases.Keys) {
     }
     finally { foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) } }
     $blocked = $out -match '"decision"\s*:\s*"block"'
+    $reason = if ($blocked) { try { ($out | ConvertFrom-Json).reason } catch { "unparsable: $out" } }
+    $lintBlocked = (Test-Path $stateFile) -and [bool](Get-Content $stateFile -Raw | ConvertFrom-Json).lintBlocked
     $problems = @(
         if ($blocked -ne $gc.expectBlock) { "blocked=$blocked, output: $out" }
         elseif (-not $gc.expectBlock -and $out) { "unexpected output: $out" }
+        elseif ($gc.reason -and $reason -notmatch $gc.reason) { "reason did not match /$($gc.reason)/: $reason" }
+        if ($lintBlocked -ne [bool]$gc.expectLintBlocked) { "state lintBlocked=$lintBlocked, expected $([bool]$gc.expectLintBlocked)" }
     )
     [pscustomobject]@{
         scenario = $name; expectStop = $(if ($gc.expectBlock) { 'block' } else { 'allow' }); stop = $(if ($blocked) { 'block' } else { 'allow' })

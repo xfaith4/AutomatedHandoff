@@ -2,6 +2,15 @@
 
 > Active operational context only. Newest entry first.
 
+## 2026-11-11 — B2 handoff lint wired into the Stop guard and the loop log (B3 next)
+
+- **Did:** context-guard.ps1 Stop branch: in a loop run with a fresh handoff, blocks once per session (state.lintBlocked) with a HANDOFF CHECK reason listing the Test-HandoffEntry problems; also fires after the stale block; skips the session-hygiene shape. Start-AgentLoop.ps1 logs session.handoffLint {pass, problems, guardBlocked} and prints a Lint row; AgentLoopReport.html shows Handoff lint. Fake-Claude gained verified and guardBlocked step fields; tests add lint-logged and 6 guard-lint-* cases. ROADMAP B2 stamped; CLAUDE.md updated.
+- **Verified:** pwsh -NoProfile -File tests/Test-AgentLoop.ps1: 39 scenarios, 0 failed. Parse check: 0 errors. node --check on the report script: ok. Invoke-RoadmapValidation: exit 0, score 100, 2 pre-existing R011 warnings. Not verified live: needs a reinstall and a Start-Agent run.
+- **Progress:** Roadmap progress appended: 9/23 items done, phases 0/0, 14 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; tests green, committed on release-0.2
+- **Next:** B3: boundary rotation in context-guard.ps1 PostToolUse (handoff rewritten this session and context above AGENT_LOOP_BOUNDARY_TOKENS, new -BoundaryLimit default 100000 in Start-AgentLoop.ps1 and Start-Agent); add stand-in scenarios to tests/Test-AgentLoop.ps1
+- **Owner:** Reinstall into both profiles so the B2 guard is live; merge release-0.2 to main; X2 still open
+
 ## 2026-11-11 — B1 handoff lint: Test-HandoffEntry (B2 next)
 
 - **Did:** Test-HandoffEntry added to Resolve-HandoffFile.ps1 (regex lint of the top entry: Next names a file/command/item ID or DONE, Verified has a command, Safe to proceed starts yes/no; returns problem strings). 8 lint-* cases in tests/Test-AgentLoop.ps1 compare exact problem lists. ROADMAP.md B1 stamped; CLAUDE.md documents it. Nothing calls it yet.

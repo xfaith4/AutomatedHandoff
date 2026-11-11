@@ -1,7 +1,8 @@
 #Requires -Version 7
 # Stand-in for claude.exe. Ignores its arguments. Reads $env:FAKE_SCENARIO (a JSON array of per-session
 # steps) and a counter in .claude/state/fake-counter under the current directory. Each step may set:
-#   label, next, owner, safe, did  -> written as a real handoff entry via Add-RunHandoffEntry.ps1
+#   label, next, owner, safe, did, verified -> written as a real handoff entry via Add-RunHandoffEntry.ps1
+#   guardBlocked: true             -> write the guard's per-session state with lintBlocked (B2)
 #   noEntry: true                  -> write nothing (simulates an agent that forgot the handoff)
 #   commit: true                   -> git commit a touched file
 #   rotate: true                   -> write .claude/state/rotate.flag (guard forced a rotation)
@@ -59,7 +60,7 @@ if ($s.error) {
 if (-not $s.noEntry) {
     $entryArgs = @{
         HandoffPath = $env:FAKE_HANDOFF; SkipProgress = $true
-        Summary = "fake step $($i + 1)"; Did = ($s.did ?? "did step $($i + 1)"); Verified = 'nothing'
+        Summary = "fake step $($i + 1)"; Did = ($s.did ?? "did step $($i + 1)"); Verified = ($s.verified ?? 'nothing')
         SafeToProceed = ($s.safe ?? 'yes'); Next = ($s.next ?? "item $($s.label)"); NextLabel = ($s.label ?? ''); Owner = ($s.owner ?? 'nothing')
     }
     & "$HOME/.claude/scripts/Add-RunHandoffEntry.ps1" @entryArgs | Out-Null
@@ -69,6 +70,10 @@ if ($s.commit) {
     git add -A 2>$null | Out-Null; git -c user.name=t -c user.email=t@t commit -q -m "step $($i + 1)" 2>$null | Out-Null
 }
 if ($s.rotate) { Set-Content (Join-Path $stateDir 'rotate.flag') 'x' }
+if ($s.guardBlocked) {   # what context-guard.ps1 leaves in its per-session state after a lint block
+    @{ startedTicks = 0; warned = $false; lastTokens = 0; lintBlocked = $true } | ConvertTo-Json -Compress |
+        Set-Content (Join-Path $stateDir "fake-$($i + 1).json")
+}
 
 P @{ type = 'result'; subtype = 'success'; is_error = $false; result = 'ok'; num_turns = 5
     total_cost_usd = [double]($s.cost ?? 1.0); session_id = "fake-$($i + 1)"

@@ -512,6 +512,15 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
     $brief = Get-HandoffBrief $handoff
     $tokens = Get-ResultTokens $result
     $startup = Get-StartupMetrics $log
+    # B2: lint the handoff as this session left it; guardBlocked = the Stop guard blocked once on the lint
+    $lintProblems = @(Test-HandoffEntry $handoff)
+    $guardState = Join-Path $stateDir "$($sessionId ?? $result.session_id).json"
+    $guardBlocked = $false
+    if (Test-Path -LiteralPath $guardState) {
+        try { $guardBlocked = [bool](Get-Content -LiteralPath $guardState -Raw | ConvertFrom-Json).lintBlocked }
+        catch { Write-Verbose "guard state unreadable: $($_.Exception.Message)" }
+    }
+    $handoffLint = [ordered]@{ pass = $lintProblems.Count -eq 0; problems = $lintProblems; guardBlocked = $guardBlocked }
     $errText = if ($result) { "$($result.result) $(@($result.errors) -join ' ')" } else { '' }
     $rateLimited = $result -and ($result.is_error -or $result.subtype -ne 'success') -and $errText -match $rateLimitRx
 
@@ -591,6 +600,7 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
         handoffNext  = $brief.next
         handoffOwner = $brief.owner
         handoffSafe  = $brief.safe
+        handoffLint  = $handoffLint
         startup      = $startup
         brief        = $briefInfo
     }
@@ -611,6 +621,9 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
         $ownerTone = if (Test-OwnerNothing $brief.owner) { 'DarkGray' } else { 'Yellow' }
         Write-Host ("  {0,-9} {1}" -f 'Owner', (Limit-Text ($brief.owner ? $brief.owner : 'nothing'))) -ForegroundColor $ownerTone
         if (-not $newEntry) { Write-Host '  (handoff entry unchanged by this session)' -ForegroundColor Yellow }
+        $lintText = if ($handoffLint.pass) { 'pass' } else { Limit-Text ($lintProblems -join '; ') 110 }
+        if ($guardBlocked) { $lintText += ' (guard blocked once)' }
+        Write-Host ("  {0,-9} {1}" -f 'Lint', $lintText) -ForegroundColor ($handoffLint.pass ? 'DarkGray' : 'Yellow')
     }
     else { Write-Host '  Handoff   (none found)' -ForegroundColor Yellow }
     $commitNote = if ($committed) { "$headBefore -> $headAfter (new commit)" } elseif ($headAfter) { "$headAfter (unchanged)" } else { 'not a git repo' }
