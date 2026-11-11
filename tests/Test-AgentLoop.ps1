@@ -260,6 +260,43 @@ $results = @($results) + @(foreach ($name in $guardCases.Keys) {
         expectSessions = 0; sessions = 0; pass = ($problems.Count -eq 0); problems = $problems -join '; '
     }
 })
+# Direct Test-HandoffEntry checks (B1): exact problem lists for each handoff shape.
+. (Join-Path (Split-Path $here -Parent) 'Resolve-HandoffFile.ps1')
+$hdr = "# Test — Current Handoff`n> Active operational context only. Newest entry first.`n`n"
+function New-Entry([string]$Next, [string]$Verified, [string]$Safe, [string]$Label = 'B1') {
+    $l = @("## 2026-01-02 — lint case ($Label next)", '', '- **Did:** something')
+    if ($null -ne $Verified) { $l += "- **Verified:** $Verified" }
+    if ($null -ne $Safe) { $l += "- **Safe to proceed:** $Safe" }
+    if ($null -ne $Next) { $l += "- **Next:** $Next" }
+    $l += '- **Owner:** nothing'
+    ($l -join "`n") + "`n`n## 2026-01-01 — older entry (A1 next)`n`n- **Verified:** n/a`n- **Safe to proceed:** maybe`n- **Next:** later`n"
+}
+$lintCases = [ordered]@{
+    'lint-pass'        = @{ text = $hdr + (New-Entry 'B2: wire the lint into context-guard.ps1' 'pwsh -NoProfile -File tests/Test-AgentLoop.ps1: 0 failed' 'yes; clean tree'); expect = @() }
+    'lint-pass-forms'  = @{ text = $hdr + (New-Entry 'run `npm test` again' 'ran `make check`, ok' 'No; owner gate'); expect = @() }
+    'lint-pass-done'   = @{ text = $hdr + (New-Entry 'DONE: roadmap finished' 'Invoke-RoadmapValidation exit 0' 'yes' 'DONE'); expect = @() }
+    'lint-vague'       = @{ text = $hdr + (New-Entry 'keep going with the rest' 'looked fine to me' 'probably'); expect = @('Next names no file, command or item ID', 'Verified names no command', 'Safe to proceed does not start with yes or no') }
+    'lint-missing'     = @{ text = $hdr + (New-Entry $null $null $null); expect = @('Next is missing or empty', 'Verified is missing or empty', 'Safe to proceed is missing or empty') }
+    'lint-empty-next'  = @{ text = $hdr + (New-Entry '' 'git status: clean' 'yes'); expect = @('Next is missing or empty') }
+    'lint-not-entry'   = @{ text = "# Handoff: something`n`n## Status`n`ndone`n`n## Next action`n`nB1`n"; expect = @('no top entry in the "## YYYY-MM-DD — summary (label next)" shape') }
+    'lint-no-file'     = @{ text = $null; expect = @('handoff file not found: <path>') }
+}
+$results = @($results) + @(foreach ($name in $lintCases.Keys) {
+    if ($Only -and $name -ne $Only) { continue }
+    $lc = $lintCases[$name]
+    $dir = Join-Path $work $name
+    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $path = Join-Path $dir 'current-handoff.md'
+    if ($null -ne $lc.text) { [IO.File]::WriteAllText($path, $lc.text) }
+    $got = @(Test-HandoffEntry $path)
+    $want = @($lc.expect | ForEach-Object { $_.Replace('<path>', $path) })
+    $problems = @(if (($got -join '|') -cne ($want -join '|')) { "got [$($got -join '; ')], want [$($want -join '; ')]" })
+    [pscustomobject]@{
+        scenario = $name; expectStop = "$($want.Count) problems"; stop = "$($got.Count) problems"
+        expectSessions = 0; sessions = 0; pass = ($problems.Count -eq 0); problems = $problems -join '; '
+    }
+})
 $results | Format-Table -AutoSize | Out-String | Write-Host
 $failed = @($results | Where-Object { -not $_.pass }).Count
 Write-Host ("{0} scenarios, {1} failed" -f @($results).Count, $failed) -ForegroundColor ($failed ? 'Red' : 'Green')

@@ -305,6 +305,18 @@
       "next": "Close Release 0.1: serve MyFinancialLedger .claude/state on 127.0.0.1 and confirm agent-loop-report.html shows the cache ratio and the brief link with no console errors, then mark 0.1 done and activate 0.2 (B1). X2 fix can go first; it affects -MaxTokens.",
       "nextLabel": "B1",
       "owner": "Approve closing 0.1 and activating 0.2; decide on .gitignore and untracking .claude/state; approve D1/D2; commit decision"
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-11T07:16:02-05:00",
+      "summary": "B1 handoff lint: Test-HandoffEntry",
+      "did": "Test-HandoffEntry added to Resolve-HandoffFile.ps1 (regex lint of the top entry: Next names a file/command/item ID or DONE, Verified has a command, Safe to proceed starts yes/no; returns problem strings). 8 lint-* cases in tests/Test-AgentLoop.ps1 compare exact problem lists. ROADMAP.md B1 stamped; CLAUDE.md documents it. Nothing calls it yet.",
+      "verified": "pwsh -NoProfile -File tests/Test-AgentLoop.ps1: 32 scenarios, 0 failed. Parse check: 0 errors on all 8 scripts. Invoke-RoadmapValidation: exit 0, score 100, 2 pre-existing R011 warnings. Test-HandoffEntry on this repo and MyFinancialLedger handoffs: no problems. Not verified live (not installed).",
+      "progress": "Roadmap progress appended: 8/23 items done, phases 0/0, 15 open-items left -> docs/ROADMAP-PROGRESS.md",
+      "safeToProceed": "yes; tests green, committed on release-0.2",
+      "next": "B2: call Test-HandoffEntry from the Stop branch of context-guard.ps1 (block once with the problems, loop runs only) and log session.handoffLint in Start-AgentLoop.ps1; add guard and loop scenarios to tests/Test-AgentLoop.ps1",
+      "nextLabel": "B2",
+      "owner": "Merge release-0.2 to main; reinstall into both profiles; X2 multi-result logging bug still open"
     }
   ]
 }

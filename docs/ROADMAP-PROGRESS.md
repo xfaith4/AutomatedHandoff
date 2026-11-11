@@ -4,31 +4,32 @@
 
 ## Current position
 
-As of 2026-11-11T07:03:20-05:00, commit `90b1c9d` +dirty, from `ROADMAP.md`.
+As of 2026-11-11T07:16:02-05:00, commit `80834cc` +dirty, from `ROADMAP.md`.
 
 | Measure | Value |
 | --- | --- |
-| Items completed | 7 of 23 (30.4%) |
-| Items open | 16 |
-| Releases complete | 1 of 4 |
+| Items completed | 8 of 23 (34.8%) |
+| Items open | 15 |
+| Releases complete | 0 of 3 |
 | Phases complete | 0 of 0 |
-| Weighted work left | 16 open items (no work-unit estimates) |
+| Weighted work left | 15 open items (no work-unit estimates) |
 | Next item | Implement retry backoff in Poll-Provider.ps1 |
 
 ## Since the previous snapshot
 
-Compared with 11/11/2026 06:43:37 (commit `90b1c9d` +dirty):
+Compared with 11/11/2026 07:03:20 (commit `90b1c9d` +dirty):
 
 - Items completed: +1
-- Items open: 0
+- Items open: -1
 - Phases completed: 0
-- Weighted work left: 0
+- Weighted work left: -1
 
 ## History
 
 | Recorded | Commit | Basis | Done | Open | Phases | Weight left | Done change |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 2026-11-11T07:03:20-05:00 | `90b1c9d` +dirty | checklist | 7 | 16 | 0/0 | 16 (open-items) | +1 |
+| 2026-11-11T07:16:02-05:00 | `80834cc` +dirty | checklist | 8 | 15 | 0/0 | 15 (open-items) | +1 |
+| 11/11/2026 07:03:20 | `90b1c9d` +dirty | checklist | 7 | 16 | 0/0 | 16 (open-items) | +1 |
 | 11/11/2026 06:43:37 | `90b1c9d` +dirty | checklist | 6 | 16 | 0/0 | 16 (open-items) | +1 |
 | 11/11/2026 06:23:23 | `90b1c9d` +dirty | checklist | 5 | 17 | 0/0 | 17 (open-items) | +1 |
 | 11/11/2026 06:10:14 | `90b1c9d` +dirty | checklist | 4 | 18 | 0/0 | 18 (open-items) | +1 |

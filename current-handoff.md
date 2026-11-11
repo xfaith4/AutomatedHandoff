@@ -2,6 +2,15 @@
 
 > Active operational context only. Newest entry first.
 
+## 2026-11-11 — B1 handoff lint: Test-HandoffEntry (B2 next)
+
+- **Did:** Test-HandoffEntry added to Resolve-HandoffFile.ps1 (regex lint of the top entry: Next names a file/command/item ID or DONE, Verified has a command, Safe to proceed starts yes/no; returns problem strings). 8 lint-* cases in tests/Test-AgentLoop.ps1 compare exact problem lists. ROADMAP.md B1 stamped; CLAUDE.md documents it. Nothing calls it yet.
+- **Verified:** pwsh -NoProfile -File tests/Test-AgentLoop.ps1: 32 scenarios, 0 failed. Parse check: 0 errors on all 8 scripts. Invoke-RoadmapValidation: exit 0, score 100, 2 pre-existing R011 warnings. Test-HandoffEntry on this repo and MyFinancialLedger handoffs: no problems. Not verified live (not installed).
+- **Progress:** Roadmap progress appended: 8/23 items done, phases 0/0, 15 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; tests green, committed on release-0.2
+- **Next:** B2: call Test-HandoffEntry from the Stop branch of context-guard.ps1 (block once with the problems, loop runs only) and log session.handoffLint in Start-AgentLoop.ps1; add guard and loop scenarios to tests/Test-AgentLoop.ps1
+- **Owner:** Merge release-0.2 to main; reinstall into both profiles; X2 multi-result logging bug still open
+
 ## 2026-11-11 — A7 recorded from live -NoBrief run 20261111-064504; X2 multi-result logging bug found (B1 next)
 
 - **Did:** ROADMAP.md: A7 stamped [x] with numbers; strict-MCP known issue marked answered (mcpServers 0); new X2 [non-blocker]. A7 no-brief (item C.6a): firstCallCtx 47900, firstEditCall 30, ctxAtFirstEdit 94176. A1 with brief (item C.5): 47976 / 20 / 84905. Counting sed -i edits: call 15 vs 25. The brief added no measurable first-call context and came with the earlier first edit; n=1 on different items. X2: the A7 session had two result events (background task re-woke it); the loop keeps only the last, so it logged 4 turns and 446k tokens instead of 46 turns and about 3.8M; cost is cumulative and right.

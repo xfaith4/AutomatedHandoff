@@ -104,7 +104,7 @@ The loop, the guard, until-done mode, the run log, the HTML report and the model
 | Release | Status  | Purpose                                                            | Dispatch readiness                |
 | ------- | ------- | ------------------------------------------------------------------ | --------------------------------- |
 | 0.1     | done    | Baseline, cache visibility, loop-built brief, loop-only Stop guard | done 2026-11-11 (Section 6)       |
-| 0.2     | active  | Handoff quality checks and rotation when an item finishes          | ready (B1 first)                  |
+| 0.2     | active  | Handoff quality checks and rotation when an item finishes          | in progress (B1 done, B2 next)    |
 | 0.3     | planned | Tests run between sessions; cheaper model for repair sessions      | planned                           |
 | 0.4     | planned | Handoff snapshot (review.md) and a commit per item                 | planned (D1, D2 approved)         |
 
@@ -126,7 +126,7 @@ _Exactly one row above should show `active`. If a second release needs to become
 
 #### Engineering milestones
 
-- [ ] [[B1]] New `Test-HandoffEntry` in `Resolve-HandoffFile.ps1` (shared by the loop and the guard): the top entry needs a Next naming a file, command or item ID, a Verified line containing at least one command, and a Safe-to-proceed starting with yes or no; returns a list of problems.
+- [x] [[B1]] New `Test-HandoffEntry` in `Resolve-HandoffFile.ps1` (shared by the loop and the guard): the top entry needs a Next naming a file, command or item ID, a Verified line containing at least one command, and a Safe-to-proceed starting with yes or no; returns a list of problems. *(completed: 2026-11-11)*
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
 - [ ] [[B2]] The `Stop` branch of `context-guard.ps1` blocks once with the `Test-HandoffEntry` problems as the reason; the loop logs them as `session.handoffLint`. (depends: B1, A3)
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
