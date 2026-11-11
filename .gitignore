@@ -1,0 +1,2 @@
+# Agent-loop runtime state: per-session guard files, rotate.flag, run logs, briefs, report
+.claude/state/
