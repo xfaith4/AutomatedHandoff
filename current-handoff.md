@@ -2,6 +2,15 @@
 
 > Active operational context only. Newest entry first.
 
+## 2026-11-11 — B3 item-boundary rotation in context-guard.ps1 PostToolUse and the loop (B4 next)
+
+- **Did:** commit 2b40836: context-guard.ps1 PostToolUse writes rotate.flag "boundary <sid>" once (state.boundaryWarned) and blocks with ITEM BOUNDARY when in a loop run, handoff fresh, context >= AGENT_LOOP_BOUNDARY_TOKENS; soft flag now "context <sid>". Start-AgentLoop.ps1 -BoundaryLimit (default 100000, 0 off, must be < -SoftLimit), env restored, loop-start.boundaryLimit, session.rotateReason (boundary|context), until-done stall/blocked checks apply to boundary rotations. Start-Agent passes -BoundaryLimit; AgentLoopReport.html shows Rotation reason; tests add boundary-rotate/stall/blocked/invalid and 8 guard-boundary-* cases; ROADMAP B3 stamped; CLAUDE.md updated
+- **Verified:** pwsh -NoProfile -File tests/Test-AgentLoop.ps1: 51 scenarios, 0 failed; parser check of all *.ps1 and tests/*.ps1: 0 errors; Invoke-RoadmapValidation.ps1 -MinimumMaturity L3-Contract-Ready -FailOnError: exit 0. Not verified: a live run (needs reinstall by the owner)
+- **Progress:** Roadmap progress appended: 10/23 items done, phases 0/0, 13 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; tests green, committed on release-0.2
+- **Next:** B4: rotate.flag as JSON reason (soft-limit, hard-limit, boundary) in context-guard.ps1, parse it in Start-AgentLoop.ps1 (rotateReason already logged as boundary|context), add a reason column to the session table in AgentLoopReport.html; check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1
+- **Owner:** Reinstall into both profiles (Install-AgentLoop.ps1 -SkipHooks) so B2 and B3 are live, then a live Start-Agent run to confirm the boundary rotation; merge release-0.2 to main; X2 still open
+
 ## 2026-11-11 — B2 handoff lint wired into the Stop guard and the loop log (B3 next)
 
 - **Did:** context-guard.ps1 Stop branch: in a loop run with a fresh handoff, blocks once per session (state.lintBlocked) with a HANDOFF CHECK reason listing the Test-HandoffEntry problems; also fires after the stale block; skips the session-hygiene shape. Start-AgentLoop.ps1 logs session.handoffLint {pass, problems, guardBlocked} and prints a Lint row; AgentLoopReport.html shows Handoff lint. Fake-Claude gained verified and guardBlocked step fields; tests add lint-logged and 6 guard-lint-* cases. ROADMAP B2 stamped; CLAUDE.md updated.

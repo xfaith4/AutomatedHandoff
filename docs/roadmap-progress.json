@@ -289,6 +289,38 @@
         "unestimatedOpenPhases": 0
       },
       "nextItem": "Implement retry backoff in Poll-Provider.ps1"
+    },
+    {
+      "recordedAt": "2026-11-11T07:46:09-05:00",
+      "commit": "2b40836",
+      "dirty": false,
+      "roadmap": "ROADMAP.md",
+      "parseState": "pending",
+      "status": "available",
+      "reason": null,
+      "basis": "checklist",
+      "marks": null,
+      "items": {
+        "completed": 10,
+        "open": 13,
+        "total": 23,
+        "percentComplete": 43.5
+      },
+      "releases": {
+        "total": 3,
+        "complete": 0
+      },
+      "phases": {
+        "total": 0,
+        "complete": 0,
+        "open": 0
+      },
+      "weight": {
+        "basis": "open-items",
+        "remaining": 13.0,
+        "unestimatedOpenPhases": 0
+      },
+      "nextItem": "Implement retry backoff in Poll-Provider.ps1"
     }
   ]
 }
