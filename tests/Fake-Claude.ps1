@@ -31,12 +31,12 @@ foreach ($k in 'AGENT_LOOP_SOFT_TOKENS', 'AGENT_LOOP_HARD_TOKENS', 'CLAUDE_HYGIE
 if ($s.startup) {
     P @{ type = 'system'; subtype = 'init'; session_id = "fake-$($i + 1)"; permissionMode = 'auto'
         tools = @('Read', 'Edit', 'Grep', 'Bash'); mcp_servers = @(@{ name = 'postgresql'; status = 'connected' }) }
-    function Use($ctx, $id, $name, $tool) {
-        P @{ type = 'assistant'; parent_tool_use_id = $null; message = @{ usage = @{ input_tokens = 10; cache_creation_input_tokens = 0; cache_read_input_tokens = $ctx - 10; output_tokens = 50 }
+    function Use($ctx, $id, $name, $tool, $created = 0) {
+        P @{ type = 'assistant'; parent_tool_use_id = $null; message = @{ usage = @{ input_tokens = 10; cache_creation_input_tokens = $created; cache_read_input_tokens = $ctx - 10 - $created; output_tokens = 50 }
                 content = @(@{ type = 'tool_use'; id = $id; name = $name; input = $tool }) } }
     }
     function Res($id, $text) { P @{ type = 'user'; parent_tool_use_id = $null; message = @{ content = @(@{ type = 'tool_result'; tool_use_id = $id; content = $text }) } } }
-    Use 30000 't1' 'Read' @{ file_path = 'C:\repo\src\a.ts' }; Res 't1' ('x' * 1000)
+    Use 30000 't1' 'Read' @{ file_path = 'C:\repo\src\a.ts' } 6000; Res 't1' ('x' * 1000)
     # Subagent traffic: must not count as a main-chain call, read or context
     P @{ type = 'assistant'; parent_tool_use_id = 'task1'; message = @{ usage = @{ input_tokens = 999999 }
             content = @(@{ type = 'tool_use'; id = 'sub1'; name = 'Edit'; input = @{ file_path = 'x' } }) } }

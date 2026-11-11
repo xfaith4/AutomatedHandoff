@@ -316,8 +316,15 @@
     const sub = edits.length
       ? `first edit at ${fmtTok(median(edits.map(x => x.ctxAtFirstEdit)))}, call ${median(edits.map(x => x.firstEditCall))} (median of ${edits.length})`
       : 'no session edited a file';
+    const hits = st.map(cacheHit).filter(h => h !== null);
+    const hitSub = hits.length ? ` · first-call cache hit ${Math.round(median(hits) * 100)}% (median of ${hits.length})` : '';
     return [el('div', { class: 'kpi' }, el('div', { class: 'label' }, 'Startup context'),
-      el('div', { class: 'value' }, fmtTok(median(st.map(x => x.firstCallCtx)))), el('div', { class: 'sub' }, sub))];
+      el('div', { class: 'value' }, fmtTok(median(st.map(x => x.firstCallCtx)))), el('div', { class: 'sub' }, sub + hitSub))];
+  }
+
+  // Share of the first call's context read from the prompt cache. null for sessions logged before the split.
+  function cacheHit(x) {
+    return typeof x.firstCallCacheRead === 'number' && x.firstCallCtx > 0 ? x.firstCallCacheRead / x.firstCallCtx : null;
   }
 
   function fmtTok(n) { return n >= 1000 ? `${Math.round(n / 1000)}k` : String(Math.round(n)); }
@@ -325,7 +332,9 @@
   function startupText(x) {
     if (!x || typeof x.firstCallCtx !== 'number') return null;
     const edit = x.firstEditCall ? `first edit at call ${x.firstEditCall} with ${fmtTok(x.ctxAtFirstEdit)} in context` : 'no Edit/Write';
-    return `${fmtTok(x.firstCallCtx)} at first call · ${edit} · ${Math.round((x.resultCharsBeforeEdit || 0) / 1000)}k chars of tool output before it · ` +
+    const h = cacheHit(x);
+    const cache = h === null ? '' : ` (${Math.round(h * 100)}% cache hit: ${fmtTok(x.firstCallCacheRead)} read, ${fmtTok(x.firstCallCacheCreation || 0)} written)`;
+    return `${fmtTok(x.firstCallCtx)} at first call${cache} · ${edit} · ${Math.round((x.resultCharsBeforeEdit || 0) / 1000)}k chars of tool output before it · ` +
       `${x.mcpServers ?? '?'} MCP servers, ${x.tools ?? '?'} tools · ${x.repeatedReads ?? 0} repeated reads`;
   }
 
@@ -420,17 +429,30 @@
     }
   }
 
+  // The brief path is absolute (it sits next to the raw stream log); the href is always file:///, never a scheme from the log.
+  function fileHref(p) {
+    const fwd = String(p).replace(/\\/g, '/');
+    return 'file://' + (fwd.startsWith('/') ? '' : '/') + encodeURI(fwd).replace(/#/g, '%23').replace(/\?/g, '%3F');
+  }
+
+  function briefLink(b) {
+    if (!b || !b.path) return null;
+    const facts = [typeof b.chars === 'number' ? `${b.chars.toLocaleString()} chars` : null, b.sha ? `sha ${String(b.sha).slice(0, 12)}` : null].filter(Boolean);
+    return el('span', {}, el('a', { href: fileHref(b.path), target: '_blank', rel: 'noopener', title: b.sha ?? '' }, b.path), facts.length ? ` (${facts.join(', ')})` : '');
+  }
+
   function detailBody(s) {
     const rec = s.record ?? {};
     const meta = [
       ['Session ID', rec.sessionId ?? s.messages[0]?.sessionId], ['Result subtype', rec.subtype],
       ['Exit code', rec.exitCode], ['Ended', rec.end && fmtTime(rec.end)], ['Raw stream log', rec.rawLog],
-      ['Tokens', typeof rec.tokens === 'number' ? rec.tokens.toLocaleString() : null], ['Startup', startupText(rec.startup)], ['Loop decision', rec.decision],
+      ['Tokens', typeof rec.tokens === 'number' ? rec.tokens.toLocaleString() : null], ['Startup', startupText(rec.startup)],
+      ['Session brief', briefLink(rec.brief)], ['Loop decision', rec.decision],
       ['Commit', rec.headBefore && rec.headAfter ? (rec.headBefore === rec.headAfter ? `${rec.headAfter} (unchanged)` : `${rec.headBefore} → ${rec.headAfter}`) : null],
       ['Handoff entry', rec.handoffEntry], ['Handoff next', rec.handoffNext], ['Handoff owner', rec.handoffOwner], ['Safe to proceed', rec.handoffSafe]
     ].filter(([, v]) => v != null && v !== '');
     return [
-      meta.length ? el('dl', { class: 'meta' }, meta.map(([k, v]) => [el('dt', {}, k), el('dd', {}, String(v))])) : null,
+      meta.length ? el('dl', { class: 'meta' }, meta.map(([k, v]) => [el('dt', {}, k), el('dd', {}, v instanceof Node ? v : String(v))])) : null,
       rec.denials?.length ? el('div', { class: 'denials' }, el('h4', {}, 'Permission denials'),
         el('ul', {}, rec.denials.map(d => el('li', {}, el('code', {}, d.tool ?? '?'), ' ', d.input ?? '')))) : null,
       s.handoffs.length ? [el('h4', {}, `Handoff entries (${s.handoffs.length})`), s.handoffs.map(handoffBody)] : null,

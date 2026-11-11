@@ -50,7 +50,12 @@ param(
     [switch]$KeepMcp,
     # Default: the session-hygiene hook uses the repo handoff as its handoff (one source of truth, no second Stop block)
     # and skips its SessionStart injection, because /handoff reads the repo handoff itself. This restores the normal hook.
-    [switch]$KeepHygieneInjection
+    [switch]$KeepHygieneInjection,
+    # Pre-session brief: git facts, the handoff's top entry and its roadmap item, written to runs/<stamp>-s<n>-brief.md
+    # and passed with --append-system-prompt-file (a file, so newlines and quotes survive Windows argument passing).
+    [ValidateRange(500, 20000)][int]$BriefMaxChars = 4000,
+    [string]$RoadmapFile = 'ROADMAP.md',
+    [switch]$NoBrief
 )
 if ($SoftLimit -ge $HardLimit) { throw "-SoftLimit ($SoftLimit) must be below -HardLimit ($HardLimit)." }
 if ($McpConfig -and -not (Test-Path -LiteralPath $McpConfig -PathType Leaf)) { throw "-McpConfig file not found: $McpConfig" }
@@ -253,7 +258,8 @@ function Get-StartupMetrics([string]$Path) {
     # traffic (parent_tool_use_id set) is not in the main context. Best-effort; never throws.
     # firstEditCall is the 1-based tool call index of the first Edit/Write (Bash edits such as sed -i don't count).
     $m = [ordered]@{
-        tools = $null; mcpServers = $null; firstCallCtx = $null; firstEditCall = $null; ctxAtFirstEdit = $null
+        tools = $null; mcpServers = $null; firstCallCtx = $null; firstCallCacheRead = $null; firstCallCacheCreation = $null
+        firstEditCall = $null; ctxAtFirstEdit = $null
         resultCharsBeforeEdit = [long]0; toolCalls = 0; repeatedReads = 0
     }
     if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $m }
@@ -272,7 +278,12 @@ function Get-StartupMetrics([string]$Path) {
                 $u = $e.message.usage
                 if ($u) {
                     $ctx = [long]$u.input_tokens + [long]$u.cache_creation_input_tokens + [long]$u.cache_read_input_tokens
-                    if ($null -eq $m.firstCallCtx) { $m.firstCallCtx = $ctx }
+                    if ($null -eq $m.firstCallCtx) {
+                        # Kept apart: a cold first call (all cache creation) costs far more than a warm one (all cache read).
+                        $m.firstCallCtx = $ctx
+                        $m.firstCallCacheRead = [long]$u.cache_read_input_tokens
+                        $m.firstCallCacheCreation = [long]$u.cache_creation_input_tokens
+                    }
                 }
                 foreach ($c in @($e.message.content)) {
                     if ($c.type -ne 'tool_use') { continue }
@@ -303,13 +314,108 @@ function Get-StartupMetrics([string]$Path) {
 function Format-Startup($S) {
     if ($null -eq $S.firstCallCtx) { return 'no usage recorded' }
     $edit = if ($S.firstEditCall) { "first edit at call $($S.firstEditCall), $(Format-Tokens $S.ctxAtFirstEdit)" } else { 'no Edit/Write' }
-    return '{0} at first call | {1} | {2} MCP servers, {3} tools | {4} repeated reads' -f (Format-Tokens $S.firstCallCtx), $edit, $S.mcpServers, $S.tools, $S.repeatedReads
+    $hit = if ($S.firstCallCtx -gt 0 -and $null -ne $S.firstCallCacheRead) { ', {0:P0} cache hit' -f ($S.firstCallCacheRead / $S.firstCallCtx) } else { '' }
+    return '{0} at first call{5} | {1} | {2} MCP servers, {3} tools | {4} repeated reads' -f (Format-Tokens $S.firstCallCtx), $edit, $S.mcpServers, $S.tools, $S.repeatedReads, $hit
 }
 
 function Limit-Text([string]$S, [int]$Max = 150) {
     $S = "$S" -replace '\s+', ' '
     if ($S.Length -le $Max) { return $S }
     return $S.Substring(0, $Max - 1) + '…'
+}
+
+function Invoke-GitLines([string[]]$GitArgs) {
+    # git output as lines, @() on failure or outside a repo. Never throws.
+    try {
+        $out = @(git -C $ProjectDir @GitArgs 2>$null)
+        if ($LASTEXITCODE -eq 0) { return @($out | Where-Object { $_ -ne $null }) }
+    }
+    catch {}
+    return @()
+}
+
+function Get-RoadmapItem([string]$Path, [string]$Label) {
+    # The roadmap lines for a handoff label: the "[[A4]]" checklist item with its indented continuation lines,
+    # under its release heading; else a heading that names the label, up to the next heading of the same level.
+    if (-not $Label -or $Label -cmatch '^(DONE|COMPLETE)$' -or -not (Test-Path -LiteralPath $Path)) { return @() }
+    $lines = @([IO.File]::ReadAllLines($Path))
+    $esc = [regex]::Escape($Label)
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -notmatch "\[\[$esc\]\]") { continue }
+        $out = [System.Collections.Generic.List[string]]::new()
+        for ($h = $i - 1; $h -ge 0; $h--) { if ($lines[$h] -match '^##\s') { $out.Add($lines[$h]); break } }
+        $out.Add($lines[$i])
+        for ($j = $i + 1; $j -lt $lines.Count -and $lines[$j] -match '^\s+\S'; $j++) { $out.Add($lines[$j]) }
+        return @($out)
+    }
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -notmatch "^(?<hashes>#{2,4})\s.*\b$esc\b") { continue }
+        $level = $Matches['hashes'].Length
+        $out = @($lines[$i])
+        for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+            if ($lines[$j] -match '^(#+)\s' -and $Matches[1].Length -le $level) { break }
+            $out += $lines[$j]
+        }
+        return $out
+    }
+    return @()
+}
+
+function New-SessionBrief($Handoff, [int]$Session, [string]$SinceHead, [string]$RoadmapPath, [int]$MaxChars) {
+    # Facts the agent would otherwise spend its first tool calls collecting. Appended to the system prompt,
+    # so it sits after the cached prefix; capped at $MaxChars, the roadmap part is cut first.
+    $nl = "`n"
+    $sb = [Text.StringBuilder]::new()
+    [void]$sb.Append("# Loop brief (session $Session)$nl$nl")
+    [void]$sb.Append("Start-AgentLoop.ps1 collected these facts just before this session started. Use them instead of " +
+        "re-running git status/log or re-reading the handoff's top entry; open files only for detail you need. " +
+        "If a file disagrees with this brief, the file wins.$nl$nl")
+
+    [void]$sb.Append("## Git$nl$nl")
+    $branch = (Invoke-GitLines @('rev-parse', '--abbrev-ref', 'HEAD') | Select-Object -First 1)
+    $head = Get-GitHead
+    if (-not $head) { [void]$sb.Append("- Not a git repository.$nl") }
+    else {
+        [void]$sb.Append("- Branch $branch, HEAD $head$nl")
+        $commits = if ($SinceHead -and $SinceHead -ne $head) { Invoke-GitLines @('log', '--oneline', '-n', '20', "$SinceHead..HEAD") } else { @() }
+        if ($SinceHead) {
+            $what = if ($commits.Count) { ($commits | ForEach-Object { "  - $_" }) -join $nl } else { '  - none' }
+            [void]$sb.Append("- Commits since the previous session started ($SinceHead):$nl$what$nl")
+        }
+        else {
+            $recent = Invoke-GitLines @('log', '--oneline', '-n', '3')
+            [void]$sb.Append("- Recent commits:$nl$(($recent | ForEach-Object { "  - $_" }) -join $nl)$nl")
+        }
+        $status = Invoke-GitLines @('status', '--porcelain')
+        if (-not $status.Count) { [void]$sb.Append("- Working tree clean.$nl") }
+        else {
+            $shown = ($status | Select-Object -First 15 | ForEach-Object { "  - ``$($_.TrimEnd())``" }) -join $nl
+            $more = if ($status.Count -gt 15) { "$nl  - ... and $($status.Count - 15) more" } else { '' }
+            [void]$sb.Append("- Working tree: $($status.Count) changed or untracked:$nl$shown$more$nl")
+        }
+    }
+
+    [void]$sb.Append("$nl## Handoff top entry ($HandoffFile)$nl$nl")
+    if (-not $Handoff.exists) { [void]$sb.Append("- No handoff file found.$nl") }
+    else {
+        foreach ($f in @(@('Entry', $Handoff.heading, 300), @('Next', $Handoff.next, 600), @('Safe to proceed', $Handoff.safe, 300),
+                @('Owner', $Handoff.owner, 400), @('Did', $Handoff.did, 800))) {
+            if ($f[1]) { [void]$sb.Append("- **$($f[0]):** $(Limit-Text $f[1] $f[2])$nl") }
+        }
+    }
+
+    $item = Get-RoadmapItem $RoadmapPath $Handoff.label
+    if ($item.Count) {
+        [void]$sb.Append("$nl## Roadmap item $($Handoff.label) ($RoadmapFile)$nl$nl")
+        [void]$sb.Append(($item -join $nl) + $nl)
+    }
+
+    $text = $sb.ToString()
+    if ($text.Length -gt $MaxChars) {
+        $marker = "$nl[brief truncated to $MaxChars chars]$nl"
+        $text = $text.Substring(0, $MaxChars - $marker.Length) + $marker
+    }
+    return $text
 }
 
 # A usage-limit or overload result. The CLI puts the message in result/errors with subtype != success.
@@ -333,6 +439,8 @@ $consecutiveFailures = 0
 $stallCount = 0
 $rateWaits = 0
 $prevBrief = Get-HandoffBrief $handoff
+$roadmapPath = if ([IO.Path]::IsPathRooted($RoadmapFile)) { $RoadmapFile } else { Join-Path $ProjectDir $RoadmapFile }
+$prevSessionHead = $null
 
 for ($n = 1; $n -le $MaxSessions; $n++) {
     Remove-Item $flag -ErrorAction SilentlyContinue
@@ -343,12 +451,33 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
     Write-Host "`n[$n/$MaxSessions] Fresh session -> $(Limit-Text $Prompt 90)" -ForegroundColor Cyan
     if ($prevBrief.exists -and $prevBrief.next) { Write-Host "  picking up: $(Limit-Text $prevBrief.next 110)" -ForegroundColor DarkGray }
 
+    $briefArgs = @()
+    $briefInfo = $null
+    if (-not $NoBrief) {
+        try {
+            $briefText = New-SessionBrief $prevBrief $n $prevSessionHead $roadmapPath $BriefMaxChars
+            $briefPath = Join-Path $runDir "$stamp-s$n-brief.md"
+            $briefBytes = [Text.UTF8Encoding]::new($false).GetBytes($briefText)
+            [IO.File]::WriteAllBytes($briefPath, $briefBytes)
+            $briefArgs = @('--append-system-prompt-file', $briefPath)
+            # sha of the exact bytes on disk, so two sessions' briefs can be compared without opening them
+            $briefInfo = [ordered]@{
+                chars = $briefText.Length
+                sha   = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($briefBytes)).ToLowerInvariant()
+                path  = $briefPath
+            }
+            Write-Host "  brief: $($briefText.Length) chars -> $briefPath" -ForegroundColor DarkGray
+        }
+        catch { Write-Warning "Session brief skipped: $($_.Exception.Message)" }
+    }
+    $prevSessionHead = $headBefore
+
     $global:LASTEXITCODE = 0
     $started = Get-Date
     $sessionId = $null
     $result = $null
     $denials = @()
-    & $ClaudePath -p $Prompt --permission-mode $PermissionMode --output-format stream-json --verbose @mcpArgs --add-dir $hygieneDir @ExtraArgs |
+    & $ClaudePath -p $Prompt --permission-mode $PermissionMode --output-format stream-json --verbose @mcpArgs --add-dir $hygieneDir @briefArgs @ExtraArgs |
         Tee-Object -FilePath $log |
         ForEach-Object {
             # A non-JSON line throws even under SilentlyContinue and would leave the previous $e in place
@@ -463,6 +592,7 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
         handoffOwner = $brief.owner
         handoffSafe  = $brief.safe
         startup      = $startup
+        brief        = $briefInfo
     }
     Write-LoopLog 'session' $row
     $sessions.Add([pscustomobject]$row)

@@ -82,7 +82,9 @@ function Start-Agent {
         [int]`$HardLimit = 190000,
         [string]`$McpConfig,          # load only the MCP servers in this file (default: none)
         [switch]`$KeepMcp,            # load the usual MCP servers (costs fixed context in every session)
-        [switch]`$KeepHygieneInjection # let the session-hygiene hook inject its own handoff too
+        [switch]`$KeepHygieneInjection, # let the session-hygiene hook inject its own handoff too
+        [switch]`$NoBrief,            # skip the pre-session brief (for a no-brief comparison run)
+        [int]`$BriefMaxChars = 4000   # cap on the pre-session brief
     )
     `$path = (Resolve-Path `$Repo -ErrorAction Stop).Path
     # Snap to repo root so CLAUDE_PROJECT_DIR, the handoff and .claude/state all line up
@@ -102,7 +104,10 @@ function Start-Agent {
         Write-Warning "No `$hf in `$path - the first session starts without one."
     }
     `$gi = Join-Path `$path '.gitignore'
-    if ((Test-Path `$gi) -and -not (Select-String -Path `$gi -Pattern '^\.claude/state/?' -Quiet)) {
+    if (-not (Test-Path `$gi)) {
+        Set-Content `$gi '.claude/state/'; Write-Host 'Created .gitignore with .claude/state/'
+    }
+    elseif (-not (Select-String -Path `$gi -Pattern '^\.claude/state/?' -Quiet)) {
         Add-Content `$gi "`n.claude/state/"; Write-Host 'Added .claude/state/ to .gitignore'
     }
 
@@ -111,6 +116,7 @@ function Start-Agent {
         ProjectDir = `$path; MaxSessions = `$Max; PermissionMode = `$Mode; Prompt = `$Prompt; ExtraArgs = `$args2
         UntilDone = `$UntilDone; MaxCostUsd = `$MaxCost; MaxTokens = `$MaxTokens; RateLimitWaitMinutes = `$RateLimitWait
         SoftLimit = `$SoftLimit; HardLimit = `$HardLimit; KeepMcp = `$KeepMcp; KeepHygieneInjection = `$KeepHygieneInjection
+        NoBrief = `$NoBrief; BriefMaxChars = `$BriefMaxChars
     }
     if (`$McpConfig) { `$loopArgs.McpConfig = (Resolve-Path `$McpConfig -ErrorAction Stop).Path }
     & '$((Join-Path $ToolsDir 'Start-AgentLoop.ps1'))' @loopArgs

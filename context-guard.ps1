@@ -11,6 +11,8 @@
                and tells Claude to finish the current step, write the handoff, and stop.
                It warns once, then again on every tool call past HardLimit.
   Stop:        blocks the stop once if current-handoff.md wasn't written this session.
+               Only inside a loop run (AGENT_LOOP_RUN_ID set by Start-AgentLoop.ps1): the hook is
+               registered at user level, so it also fires in interactive sessions, which it must not block.
 #>
 param(
     [ValidateSet('PostToolUse', 'Stop')][string]$Event = 'PostToolUse',
@@ -84,7 +86,7 @@ try {
             }
         }
         'Stop' {
-            if (-not $handoffFresh -and -not $payload.stop_hook_active) {
+            if ($env:AGENT_LOOP_RUN_ID -and -not $handoffFresh -and -not $payload.stop_hook_active) {
                 $out = @{ decision = 'block'; reason = "Rule: update $HandoffFile before ending this session." }
             }
         }
