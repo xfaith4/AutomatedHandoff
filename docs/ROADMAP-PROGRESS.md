@@ -4,11 +4,11 @@
 
 ## Current position
 
-As of 2026-11-11T07:46:09-05:00, commit `2b40836`, from `ROADMAP.md`.
+As of 2026-11-11T08:05:43-05:00, commit `afc48fd` +dirty, from `ROADMAP.md`.
 
 | Measure | Value |
 | --- | --- |
-| Items completed | 10 of 23 (43.5%) |
+| Items completed | 11 of 24 (45.8%) |
 | Items open | 13 |
 | Releases complete | 0 of 3 |
 | Phases complete | 0 of 0 |
@@ -17,18 +17,19 @@ As of 2026-11-11T07:46:09-05:00, commit `2b40836`, from `ROADMAP.md`.
 
 ## Since the previous snapshot
 
-Compared with 11/11/2026 07:26:58 (commit `4940226` +dirty):
+Compared with 11/11/2026 07:46:09 (commit `2b40836`):
 
 - Items completed: +1
-- Items open: -1
+- Items open: 0
 - Phases completed: 0
-- Weighted work left: -1
+- Weighted work left: 0
 
 ## History
 
 | Recorded | Commit | Basis | Done | Open | Phases | Weight left | Done change |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 2026-11-11T07:46:09-05:00 | `2b40836` | checklist | 10 | 13 | 0/0 | 13 (open-items) | +1 |
+| 2026-11-11T08:05:43-05:00 | `afc48fd` +dirty | checklist | 11 | 13 | 0/0 | 13 (open-items) | +1 |
+| 11/11/2026 07:46:09 | `2b40836` | checklist | 10 | 13 | 0/0 | 13 (open-items) | +1 |
 | 11/11/2026 07:26:58 | `4940226` +dirty | checklist | 9 | 14 | 0/0 | 14 (open-items) | +1 |
 | 11/11/2026 07:16:02 | `80834cc` +dirty | checklist | 8 | 15 | 0/0 | 15 (open-items) | +1 |
 | 11/11/2026 07:03:20 | `90b1c9d` +dirty | checklist | 7 | 16 | 0/0 | 16 (open-items) | +1 |

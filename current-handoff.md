@@ -2,6 +2,15 @@
 
 > Active operational context only. Newest entry first.
 
+## 2026-11-11 — X3: Start-Agent auto-updates from source (B4 next)
+
+- **Did:** New Start-Agent.ps1 (was the profile here-string); Install-AgentLoop.ps1 hash-diff copy with parse-check refusal, -FilesOnly, install.json, profile block is now an alias; 5 autoupdate-* checks in tests/Test-AgentLoop.ps1; README, CLAUDE.md, ROADMAP X3. Uncommitted.
+- **Verified:** pwsh -NoProfile -File tests/Test-AgentLoop.ps1: 56 scenarios, 0 failed; parser check of all .ps1: 0 errors; Invoke-RoadmapValidation: exit 0, score 100. Not verified: a real install into the profiles and a live Start-Agent run.
+- **Progress:** Roadmap progress appended: 11/24 items done, phases 0/0, 13 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; tests green, but the profiles still hold the old function block until Ben reinstalls
+- **Next:** B4: rotate.flag JSON reason in context-guard.ps1 and Start-AgentLoop.ps1 (ROADMAP Release 0.2)
+- **Owner:** Reinstall once into both profiles (Install-AgentLoop.ps1 -SkipHooks -ProfilePath ...), then . $PROFILE and a live Start-Agent; review and commit the X3 change
+
 ## 2026-11-11 — B3 item-boundary rotation in context-guard.ps1 PostToolUse and the loop (B4 next)
 
 - **Did:** commit 2b40836: context-guard.ps1 PostToolUse writes rotate.flag "boundary <sid>" once (state.boundaryWarned) and blocks with ITEM BOUNDARY when in a loop run, handoff fresh, context >= AGENT_LOOP_BOUNDARY_TOKENS; soft flag now "context <sid>". Start-AgentLoop.ps1 -BoundaryLimit (default 100000, 0 off, must be < -SoftLimit), env restored, loop-start.boundaryLimit, session.rotateReason (boundary|context), until-done stall/blocked checks apply to boundary rotations. Start-Agent passes -BoundaryLimit; AgentLoopReport.html shows Rotation reason; tests add boundary-rotate/stall/blocked/invalid and 8 guard-boundary-* cases; ROADMAP B3 stamped; CLAUDE.md updated

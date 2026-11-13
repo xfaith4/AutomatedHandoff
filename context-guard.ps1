@@ -76,7 +76,9 @@ try {
             $tokens = Get-ContextTokens $payload.transcript_path
             $state.lastTokens = $tokens
             if ($tokens -ge $SoftLimit) {
-                Set-Content -Path $flag -Value "context $($payload.session_id)"   # tells the outer loop to relaunch; first word = reason
+                # Tells the outer loop to relaunch. Rewritten on every call past the soft limit, so a session that
+                # crosses the hard limit ends with reason hard-limit.
+                Write-RotateFlag ($tokens -ge $HardLimit ? 'hard-limit' : 'soft-limit') $tokens
                 if (-not $state.warned -or $tokens -ge $HardLimit) {
                     $state.warned = $true
                     $k = [math]::Round($tokens / 1000)

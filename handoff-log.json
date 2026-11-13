@@ -343,6 +343,18 @@
       "owner": "Reinstall into both profiles (Install-AgentLoop.ps1 -SkipHooks) so B2 and B3 are live, then a live Start-Agent run to confirm the boundary rotation; merge release-0.2 to main; X2 still open",
       "runId": "20261111-073452",
       "session": 1
+    },
+    {
+      "type": "handoff",
+      "recordedAt": "2026-11-11T08:05:43-05:00",
+      "summary": "X3: Start-Agent auto-updates from source",
+      "did": "New Start-Agent.ps1 (was the profile here-string); Install-AgentLoop.ps1 hash-diff copy with parse-check refusal, -FilesOnly, install.json, profile block is now an alias; 5 autoupdate-* checks in tests/Test-AgentLoop.ps1; README, CLAUDE.md, ROADMAP X3. Uncommitted.",
+      "verified": "pwsh -NoProfile -File tests/Test-AgentLoop.ps1: 56 scenarios, 0 failed; parser check of all .ps1: 0 errors; Invoke-RoadmapValidation: exit 0, score 100. Not verified: a real install into the profiles and a live Start-Agent run.",
+      "progress": "Roadmap progress appended: 11/24 items done, phases 0/0, 13 open-items left -> docs/ROADMAP-PROGRESS.md",
+      "safeToProceed": "yes; tests green, but the profiles still hold the old function block until Ben reinstalls",
+      "next": "B4: rotate.flag JSON reason in context-guard.ps1 and Start-AgentLoop.ps1 (ROADMAP Release 0.2)",
+      "nextLabel": "B4",
+      "owner": "Reinstall once into both profiles (Install-AgentLoop.ps1 -SkipHooks -ProfilePath ...), then . $PROFILE and a live Start-Agent; review and commit the X3 change"
     }
   ]
 }

@@ -5,29 +5,49 @@
   - Copies context-guard.ps1 + Start-AgentLoop.ps1 to ~/.claude/agent-loop
   - Merges the PostToolUse/Stop hooks into ~/.claude/settings.json (user-level, every repo)
     without touching your existing hooks
-  - Adds a Start-Agent function to $PROFILE (idempotent; re-running replaces the block)
+  - Adds a Start-Agent alias to $PROFILE (idempotent; re-running replaces the block). It points at the
+    installed Start-Agent.ps1, which re-syncs from this source folder (recorded in install.json) on every call.
 
 .EXAMPLE
-  ./Install-AgentLoop.ps1            # run from the folder holding the two scripts
+  ./Install-AgentLoop.ps1            # run from the folder holding the scripts
   . $PROFILE                          # reload
   Start-Agent F:\Development\MyRepo
+
+.EXAMPLE
+  ./Install-AgentLoop.ps1 -FilesOnly  # copy changed runtime files only; outputs the names it copied
 #>
 param(
     [string]$SourceDir = $PSScriptRoot,
     [string]$ToolsDir = (Join-Path $HOME '.claude/agent-loop'),
     [string]$ProfilePath = $PROFILE,    # the VS Code terminal uses Microsoft.VSCode_profile.ps1
-    [switch]$SkipHooks
+    [switch]$SkipHooks,
+    [switch]$FilesOnly                  # sync runtime files only: no hooks, profile or install.json
 )
 $ErrorActionPreference = 'Stop'
+$SourceDir = (Resolve-Path $SourceDir).Path
 
-# 1. Copy scripts
-New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
-foreach ($f in 'context-guard.ps1', 'Start-AgentLoop.ps1', 'Resolve-HandoffFile.ps1', 'New-AgentLoopReport.ps1', 'AgentLoopReport.html',
-    'Invoke-LoopSummary.ps1', 'LoopSummaryPrompt.md', 'loop-summary.schema.json') {
-    Copy-Item (Join-Path $SourceDir $f) $ToolsDir -Force
+# 1. Copy the runtime files that differ. Refuse the whole copy when any source script fails to parse, so a
+#    half-edited working tree never replaces a working installed copy.
+$files = 'Start-Agent.ps1', 'context-guard.ps1', 'Start-AgentLoop.ps1', 'Resolve-HandoffFile.ps1', 'New-AgentLoopReport.ps1',
+'AgentLoopReport.html', 'Invoke-LoopSummary.ps1', 'LoopSummaryPrompt.md', 'loop-summary.schema.json'
+$broken = foreach ($f in $files -like '*.ps1') {
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $SourceDir $f), [ref]$null, [ref]$parseErrors)
+    if (@($parseErrors).Count) { "$f (line $($parseErrors[0].Extent.StartLineNumber): $($parseErrors[0].Message))" }
 }
+if ($broken) { throw "Source has parse errors, installed copy unchanged: $($broken -join '; ')" }
+New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+$copied = foreach ($f in $files) {
+    $from = Join-Path $SourceDir $f
+    $to = Join-Path $ToolsDir $f
+    if ((Test-Path $to) -and (Get-FileHash $from).Hash -eq (Get-FileHash $to).Hash) { continue }
+    Copy-Item $from $to -Force
+    $f
+}
+if ($FilesOnly) { return $copied }
+@{ sourceDir = $SourceDir } | ConvertTo-Json | Set-Content (Join-Path $ToolsDir 'install.json')
 $guard = (Join-Path $ToolsDir 'context-guard.ps1') -replace '\\', '/'
-Write-Host "Scripts -> $ToolsDir" -ForegroundColor Green
+Write-Host "Scripts -> $ToolsDir ($(@($copied).Count) changed); auto-update source: $SourceDir" -ForegroundColor Green
 
 # 2. Merge hooks into user-level settings.json (backs up first, skips duplicates)
 if (-not $SkipHooks) {
@@ -52,76 +72,15 @@ if (-not $SkipHooks) {
     $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsPath
 }
 
-# 3. Profile function (between markers so re-runs replace it cleanly)
+# 3. Profile alias (between markers so re-runs replace it cleanly). The logic lives in the installed
+#    Start-Agent.ps1, so updating the scripts never needs a profile edit or a `. $PROFILE`.
 $begin = '# >>> agent-loop >>>'
 $end = '# <<< agent-loop <<<'
 $block = @"
 $begin
-function Start-Agent {
-    <#
-    .SYNOPSIS  Run the context-rotating Claude Code loop against a repo.
-    .EXAMPLE   Start-Agent F:\Development\MyRepo -Max 8
-    .EXAMPLE   Start-Agent            # current folder (snaps to git root)
-    .EXAMPLE   Start-Agent F:\Development\MyRepo -UntilDone -Max 20 -MaxCost 60   # work the roadmap until DONE
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Position = 0)][string]`$Repo = (Get-Location).Path,
-        [int]`$Max = 10,
-        [switch]`$UntilDone,          # continue after each finished item until the handoff says DONE, is blocked, or stalls
-        [double]`$MaxCost = 0,        # cumulative estimated cost cap in USD (0 = none)
-        [long]`$MaxTokens = 0,        # cumulative token cap (0 = none)
-        [double]`$RateLimitWait = 0,  # minutes to sleep on a usage-limit result before a new session (0 = stop)
-        [ValidateSet('auto','acceptEdits','manual','dontAsk','plan','bypassPermissions')]
-        [string]`$Mode = 'auto',
-        [string]`$Prompt = '/handoff',
-        [string]`$HandoffFile,    # e.g. docs\CURRENT-HANDOFF.md - saved to .claude\agent-loop.json for this repo
-        [string[]]`$Tools = @('Bash(pwsh:*)','Edit','Write','Read','Glob','Grep'),
-        [string[]]`$ExtraArgs = @(),
-        [int]`$SoftLimit = 170000,    # context-guard rotation point per session
-        [int]`$HardLimit = 190000,
-        [int]`$BoundaryLimit = 100000, # rotate once an item closes (handoff rewritten) above this; 0 = off
-        [string]`$McpConfig,          # load only the MCP servers in this file (default: none)
-        [switch]`$KeepMcp,            # load the usual MCP servers (costs fixed context in every session)
-        [switch]`$KeepHygieneInjection, # let the session-hygiene hook inject its own handoff too
-        [switch]`$NoBrief,            # skip the pre-session brief (for a no-brief comparison run)
-        [int]`$BriefMaxChars = 4000   # cap on the pre-session brief
-    )
-    `$path = (Resolve-Path `$Repo -ErrorAction Stop).Path
-    # Snap to repo root so CLAUDE_PROJECT_DIR, the handoff and .claude/state all line up
-    `$root = git -C `$path rev-parse --show-toplevel 2>`$null
-    if (`$LASTEXITCODE -eq 0 -and `$root) { `$path = (Resolve-Path `$root).Path }
-
-    if (`$HandoffFile) {
-        `$cfgDir = Join-Path `$path '.claude'
-        New-Item -ItemType Directory -Force -Path `$cfgDir | Out-Null
-        @{ handoffFile = (`$HandoffFile -replace '\\','/') } | ConvertTo-Json |
-            Set-Content (Join-Path `$cfgDir 'agent-loop.json')
-        Write-Host "Saved handoff location for this repo: `$HandoffFile"
-    }
-    . '$((Join-Path $ToolsDir 'Resolve-HandoffFile.ps1'))'
-    `$hf = Resolve-HandoffFile `$path ''
-    if (-not (Test-Path (Join-Path `$path `$hf))) {
-        Write-Warning "No `$hf in `$path - the first session starts without one."
-    }
-    `$gi = Join-Path `$path '.gitignore'
-    if (-not (Test-Path `$gi)) {
-        Set-Content `$gi '.claude/state/'; Write-Host 'Created .gitignore with .claude/state/'
-    }
-    elseif (-not (Select-String -Path `$gi -Pattern '^\.claude/state/?' -Quiet)) {
-        Add-Content `$gi "`n.claude/state/"; Write-Host 'Added .claude/state/ to .gitignore'
-    }
-
-    `$args2 = @('--allowedTools') + `$Tools + `$ExtraArgs
-    `$loopArgs = @{
-        ProjectDir = `$path; MaxSessions = `$Max; PermissionMode = `$Mode; Prompt = `$Prompt; ExtraArgs = `$args2
-        UntilDone = `$UntilDone; MaxCostUsd = `$MaxCost; MaxTokens = `$MaxTokens; RateLimitWaitMinutes = `$RateLimitWait
-        SoftLimit = `$SoftLimit; HardLimit = `$HardLimit; BoundaryLimit = `$BoundaryLimit; KeepMcp = `$KeepMcp; KeepHygieneInjection = `$KeepHygieneInjection
-        NoBrief = `$NoBrief; BriefMaxChars = `$BriefMaxChars
-    }
-    if (`$McpConfig) { `$loopArgs.McpConfig = (Resolve-Path `$McpConfig -ErrorAction Stop).Path }
-    & '$((Join-Path $ToolsDir 'Start-AgentLoop.ps1'))' @loopArgs
-}
+# Start-Agent re-syncs ~/.claude/agent-loop from $SourceDir on each call (-NoUpdate skips it).
+if (Test-Path Function:\Start-Agent) { Remove-Item Function:\Start-Agent }   # drop a pre-alias definition
+Set-Alias Start-Agent '$((Join-Path $ToolsDir 'Start-Agent.ps1'))'
 $end
 "@
 

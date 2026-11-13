@@ -402,6 +402,73 @@ $results = @($results) + @(foreach ($name in $lintCases.Keys) {
         expectSessions = 0; sessions = 0; pass = ($problems.Count -eq 0); problems = $problems -join '; '
     }
 })
+# X3: auto-update. Install a copy of the source into a temp tools dir, then check that the installed Start-Agent.ps1
+# syncs changed files, refuses a source with parse errors, and runs its own new copy (with -NoUpdate) when replaced.
+$repoDir = Split-Path $here -Parent
+$auSrc = Join-Path $work 'autoupdate-src'
+$auTools = Join-Path $work 'autoupdate-tools'
+$auProfile = Join-Path $work 'autoupdate-profile.ps1'
+$auFiles = 'Start-Agent.ps1', 'context-guard.ps1', 'Start-AgentLoop.ps1', 'Resolve-HandoffFile.ps1', 'New-AgentLoopReport.ps1',
+'AgentLoopReport.html', 'Invoke-LoopSummary.ps1', 'LoopSummaryPrompt.md', 'loop-summary.schema.json'
+function Get-StaleFiles { @($auFiles | Where-Object { (Get-FileHash (Join-Path $auSrc $_)).Hash -ne (Get-FileHash (Join-Path $auTools $_)).Hash }) }
+$auCases = [ordered]@{
+    'autoupdate-install'     = {
+        $auSrc, $auTools, $auProfile | Where-Object { Test-Path $_ } | Remove-Item -Recurse -Force
+        New-Item -ItemType Directory -Force -Path $auSrc | Out-Null
+        foreach ($f in $auFiles + 'Install-AgentLoop.ps1') { Copy-Item (Join-Path $repoDir $f) $auSrc }
+        & (Join-Path $auSrc 'Install-AgentLoop.ps1') -ToolsDir $auTools -ProfilePath $auProfile -SkipHooks *>&1 | Out-Null
+        $cfg = Get-Content (Join-Path $auTools 'install.json') -Raw | ConvertFrom-Json
+        if ($cfg.sourceDir -ne (Resolve-Path $auSrc).Path) { "install.json sourceDir = $($cfg.sourceDir)" }
+        $alias = "Set-Alias Start-Agent '$(Join-Path $auTools 'Start-Agent.ps1')'"
+        if (-not (Get-Content $auProfile -Raw).Contains($alias)) { "profile has no line: $alias" }
+        $stale = Get-StaleFiles; if ($stale) { "not installed: $($stale -join ', ')" }
+    }
+    'autoupdate-noop'        = {
+        $got = @(& (Join-Path $auSrc 'Install-AgentLoop.ps1') -ToolsDir $auTools -FilesOnly)
+        if ($got.Count) { "FilesOnly with no change copied: $($got -join ', ')" }
+    }
+    'autoupdate-sync'        = {
+        Add-Content (Join-Path $auSrc 'Start-AgentLoop.ps1') '# changed'
+        Add-Content (Join-Path $auSrc 'AgentLoopReport.html') '<!-- changed -->'
+        $out = & (Join-Path $auTools 'Start-Agent.ps1') -UpdateOnly 6>&1 3>&1 | Out-String
+        $stale = Get-StaleFiles; if ($stale) { "still stale: $($stale -join ', ')" }
+        if ($out -notmatch 'updated from .*Start-AgentLoop\.ps1, AgentLoopReport\.html') { "no update message: $out" }
+    }
+    'autoupdate-parse-error' = {
+        $before = (Get-FileHash (Join-Path $auTools 'context-guard.ps1')).Hash
+        Add-Content (Join-Path $auSrc 'context-guard.ps1') 'function {'
+        Add-Content (Join-Path $auSrc 'Start-AgentLoop.ps1') '# changed again'
+        $out = & (Join-Path $auTools 'Start-Agent.ps1') -UpdateOnly 3>&1 | Out-String
+        if ((Get-FileHash (Join-Path $auTools 'context-guard.ps1')).Hash -ne $before) { 'broken context-guard.ps1 was installed' }
+        if ((Get-StaleFiles) -notcontains 'Start-AgentLoop.ps1') { 'Start-AgentLoop.ps1 copied despite a broken source' }
+        if ($out -notmatch 'parse errors.*context-guard\.ps1') { "no parse-error warning: $out" }
+        Copy-Item (Join-Path $repoDir 'context-guard.ps1') $auSrc -Force
+    }
+    'autoupdate-self'        = {
+        # The new source copy returns early on -NoUpdate and leaves a marker; the installed copy has no such line,
+        # so the marker proves the replaced script re-ran itself as the new copy, once.
+        $marker = Join-Path $work 'autoupdate-marker.txt'
+        Remove-Item $marker -ErrorAction Ignore
+        $sa = Join-Path $auSrc 'Start-Agent.ps1'
+        $text = (Get-Content $sa -Raw) -replace "(?m)^\`$ErrorActionPreference = 'Stop'\r?$",
+            "`$0`nif (`$NoUpdate) { Add-Content '$marker' 'reinvoked'; return }"
+        Set-Content $sa $text
+        # A repo path that does not exist: the old copy throws before starting a loop, the new one returns first.
+        & (Join-Path $auTools 'Start-Agent.ps1') (Join-Path $work 'no-such-repo') *>&1 | Out-Null
+        if (-not (Test-Path $marker)) { 'new Start-Agent.ps1 was not re-run' }
+        elseif (@(Get-Content $marker).Count -ne 1) { "re-ran $(@(Get-Content $marker).Count) times" }
+        $stale = Get-StaleFiles; if ($stale) { "still stale: $($stale -join ', ')" }
+    }
+}
+$results = @($results) + @(foreach ($name in $auCases.Keys) {
+    if ($Only -and $name -ne $Only -and $name -ne 'autoupdate-install') { continue }
+    if ($Only -and $Only -notlike 'autoupdate-*') { continue }
+    $problems = @(try { & $auCases[$name] } catch { "threw: $($_.Exception.Message)" })
+    [pscustomobject]@{
+        scenario = $name; expectStop = 'ok'; stop = $(if ($problems.Count) { 'problems' } else { 'ok' })
+        expectSessions = 0; sessions = 0; pass = ($problems.Count -eq 0); problems = $problems -join '; '
+    }
+})
 $results | Format-Table -AutoSize | Out-String | Write-Host
 $failed = @($results | Where-Object { -not $_.pass }).Count
 Write-Host ("{0} scenarios, {1} failed" -f @($results).Count, $failed) -ForegroundColor ($failed ? 'Red' : 'Green')

@@ -37,18 +37,21 @@ After every session the loop prints a brief: the outcome, the decision it made a
 
 ## Install
 
-The files in this folder are the source. The installer copies the runtime files to `~/.claude/agent-loop/`, registers the hooks, and adds a `Start-Agent` function to your PowerShell profile:
+The files in this folder are the source. The installer copies the runtime files to `~/.claude/agent-loop/`, registers the hooks, and adds a `Start-Agent` alias to your PowerShell profile:
 
 ```powershell
 pwsh -NoProfile -File .\Install-AgentLoop.ps1
 . $PROFILE
 ```
 
+You run this once. The alias points at the installed `Start-Agent.ps1`, and the installer records this folder in `~/.claude/agent-loop/install.json`. Each `Start-Agent` call first copies any changed runtime files from this folder (`Install-AgentLoop.ps1 -FilesOnly`), so edits here take effect on the next run without a reinstall. If a source script fails to parse, nothing is copied and the installed copy runs, with a warning. `Start-Agent -NoUpdate` skips the sync, and `Start-Agent -UpdateOnly` syncs without starting a run. The sync copies the working tree as it is, uncommitted edits and the checked-out branch included.
+
 | Parameter | Default | Purpose |
 | --- | --- | --- |
 | `-ToolsDir` | `~/.claude/agent-loop` | Where the runtime files go. |
 | `-ProfilePath` | `$PROFILE` | Profile that gets `Start-Agent`. The VS Code terminal loads `Microsoft.VSCode_profile.ps1`, so pass that path if you run from VS Code. |
 | `-SkipHooks` | off | Don't touch `~/.claude/settings.json`. Use it on reinstalls. |
+| `-FilesOnly` | off | Copy only the runtime files that differ, and output their names. No hooks, profile or `install.json`. `Start-Agent` calls it this way. |
 
 The installer:
 
@@ -186,7 +189,8 @@ pwsh -File ~/.claude/agent-loop/New-AgentLoopReport.ps1 -LogPath .\.claude\state
 
 | File | Role |
 | --- | --- |
-| `Install-AgentLoop.ps1` | Installs the runtime files, the hooks, and `Start-Agent`. |
+| `Install-AgentLoop.ps1` | Installs the runtime files, the hooks, and the `Start-Agent` alias. |
+| `Start-Agent.ps1` | What `Start-Agent` runs: syncs from source, then starts `Start-AgentLoop.ps1` against the repo. |
 | `Start-AgentLoop.ps1` | The outer loop. |
 | `context-guard.ps1` | `PostToolUse` and `Stop` hook. |
 | `Resolve-HandoffFile.ps1` | Handoff path resolution, shared by the loop and the guard. |

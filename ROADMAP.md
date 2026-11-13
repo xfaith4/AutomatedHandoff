@@ -281,6 +281,8 @@ Live result: A1 with the brief reached its first edit at call 20 with 84,905 con
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
 - [ ] [[X2]] A session with more than one `result` event is logged from the last one only. `Start-AgentLoop.ps1` keeps `$result = $e`, so turns, tokens and duration come from the final segment. Seen in run 20261111-064504: a background task re-woke the session after its first result (42 turns, $1.78), and the log shows 4 turns and 446k tokens. `total_cost_usd` is cumulative, so cost is right. Sum `num_turns`, the result tokens and `duration_ms` across result events, keep the last cost, and add a Fake-Claude scenario with two results. This also matters for `-MaxTokens`. [non-blocker]
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
+- [x] [[X3]] `Start-Agent` auto-updates: the profile holds only an alias to the installed `Start-Agent.ps1`, which syncs changed runtime files from the source folder in `install.json` (`Install-AgentLoop.ps1 -FilesOnly`, refused on parse errors) and re-runs itself when replaced; `-NoUpdate`, `-UpdateOnly`. *(completed: 2026-11-11)*
+      `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
 
 ---
 
