@@ -58,7 +58,10 @@ param(
     # and passed with --append-system-prompt-file (a file, so newlines and quotes survive Windows argument passing).
     [ValidateRange(500, 20000)][int]$BriefMaxChars = 4000,
     [string]$RoadmapFile = 'ROADMAP.md',
-    [switch]$NoBrief
+    [switch]$NoBrief,
+    # B5: when a session ends without a valid handoff entry, resume it once (warm cache) with a fixed
+    # "write the handoff entry" prompt and --max-turns 5. Logged as a `repair` line. This turns it off.
+    [switch]$NoRepair
 )
 if ($SoftLimit -ge $HardLimit) { throw "-SoftLimit ($SoftLimit) must be below -HardLimit ($HardLimit)." }
 if ($BoundaryLimit -ge $SoftLimit) { throw "-BoundaryLimit ($BoundaryLimit) must be below -SoftLimit ($SoftLimit); 0 turns it off." }
@@ -424,6 +427,46 @@ function New-SessionBrief($Handoff, [int]$Session, [string]$SinceHead, [string]$
     return $text
 }
 
+function Invoke-HandoffRepair([string]$SessionId, [string]$Trigger, [string[]]$Problems, [string]$LogFile, [string[]]$SessionArgs) {
+    # B5: one `claude -p --resume <id>` call right after the session ended, so its prompt cache is still warm.
+    # $SessionArgs repeats the session's MCP, brief and extra args: a different system prompt or tool set would
+    # miss the cache. The prompt is one line without double quotes (Windows argument passing, claude.cmd).
+    $why = if ($Problems.Count) { ($Problems -join '; ') -replace '"', '' -replace '\s+', ' ' } else { 'no entry written' }
+    $text = "HANDOFF REPAIR: this session ended without a valid handoff entry ($why). Do no other work. " +
+    "Write the run handoff entry now with Add-RunHandoffEntry.ps1 -HandoffPath $HandoffFile as rule 30-run-handoff.md describes: " +
+    "what this session did, the commands it verified with, Safe to proceed yes or no, a Next naming a roadmap item ID, file or command, and the Owner line. Then stop."
+    $r = [ordered]@{ trigger = $Trigger; problemsBefore = @($Problems); repairSessionId = $null; exitCode = $null; success = $false
+        subtype = $null; turns = $null; costUsd = $null; tokens = [long]0; durationSec = $null; rawLog = $LogFile }
+    Write-Host "  handoff repair ($Trigger): resuming $SessionId with --max-turns 5" -ForegroundColor Magenta
+    $t0 = Get-Date
+    $res = $null; $rid = $null; $turnsSum = 0; $tokensSum = [long]0   # X2: sum per-segment turns/tokens
+    $global:LASTEXITCODE = 0
+    try {
+        & $ClaudePath -p $text --resume $SessionId --max-turns 5 --permission-mode $PermissionMode --output-format stream-json --verbose @SessionArgs |
+            Tee-Object -FilePath $LogFile |
+            ForEach-Object {
+                try { $e = $_ | ConvertFrom-Json -ErrorAction Stop } catch { return }
+                if ($e.type -eq 'system' -and $e.subtype -eq 'init') { $rid = $e.session_id }
+                elseif ($e.type -eq 'assistant') {
+                    $e.message.content | Where-Object type -eq 'text' | ForEach-Object {
+                        Write-Host $_.text -ForegroundColor DarkGray
+                        Write-LoopLog 'message' ([ordered]@{ session = $n; sessionId = $rid; repair = $true; text = $_.text })
+                    }
+                }
+                elseif ($e.type -eq 'result') { $res = $e; $turnsSum += [int]($e.num_turns ?? 0); $tokensSum += Get-ResultTokens $e }
+            }
+        $r.exitCode = $LASTEXITCODE
+    }
+    catch { Write-Warning "Handoff repair failed to run: $($_.Exception.Message)"; $r.exitCode = -1 }
+    $r.repairSessionId = $rid ?? $res.session_id
+    $r.durationSec = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+    if ($res) {
+        $r.subtype = $res.subtype; $r.turns = $turnsSum; $r.costUsd = $res.total_cost_usd; $r.tokens = $tokensSum
+        $r.success = $r.exitCode -eq 0 -and -not $res.is_error -and $res.subtype -eq 'success'
+    }
+    return $r
+}
+
 # A usage-limit or overload result. The CLI puts the message in result/errors with subtype != success.
 $rateLimitRx = '(?i)usage limit|rate.?limit|hit your limit|limit reached|out of (extra )?usage|resets? (at|in)\b|overloaded|\b429\b'
 
@@ -436,6 +479,7 @@ Write-LoopLog 'loop-start' ([ordered]@{
         stallSessions = $StallSessions; maxConsecutiveFailures = $MaxConsecutiveFailures
         rateLimitWaitMinutes = $RateLimitWaitMinutes
         softLimit = $SoftLimit; hardLimit = $HardLimit; boundaryLimit = $BoundaryLimit; mcp = $mcpMode; hygieneHook = $hygieneMode
+        repair = -not $NoRepair
     })
 $sessions = [System.Collections.Generic.List[object]]::new()
 $stopReason = 'max-sessions'
@@ -482,6 +526,9 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
     $started = Get-Date
     $sessionId = $null
     $result = $null
+    # X2: a session can emit several result events (a background task re-wakes it after the first). num_turns and
+    # usage are per segment, so they are summed; total_cost_usd is cumulative, so the last one is kept.
+    $resultCount = 0; $turnsSum = 0; $tokensSum = [long]0
     $denials = @()
     & $ClaudePath -p $Prompt --permission-mode $PermissionMode --output-format stream-json --verbose @mcpArgs --add-dir $hygieneDir @briefArgs @ExtraArgs |
         Tee-Object -FilePath $log |
@@ -498,6 +545,7 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
                 }
                 elseif ($e.type -eq 'result') {
                     $result = $e
+                    $resultCount++; $turnsSum += [int]($e.num_turns ?? 0); $tokensSum += Get-ResultTokens $e
                     Write-Host ("Session end: {0} | turns {1} | `${2:N2} | {3} tokens" -f $e.subtype, $e.num_turns, $e.total_cost_usd, (Format-Tokens (Get-ResultTokens $e))) -ForegroundColor Yellow
                     $denied = @($e.permission_denials | Where-Object { $_ })
                     if ($denied.Count) {
@@ -513,35 +561,69 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
     $exit = $LASTEXITCODE
     $ended = Get-Date
 
-    if (Test-Path $handoff) { Copy-Item $handoff (Join-Path $runDir "$stamp-s$n-handoff.md") }
     $headAfter = Get-GitHead
-    $brief = Get-HandoffBrief $handoff
-    $tokens = Get-ResultTokens $result
+    $tokens = $tokensSum
     $startup = Get-StartupMetrics $log
-    # B2: lint the handoff as this session left it; guardBlocked = the Stop guard blocked once on the lint
+    $sid = $sessionId ?? $result.session_id
+    $errText = if ($result) { "$($result.result) $(@($result.errors) -join ' ')" } else { '' }
+    $rateLimited = $result -and ($result.is_error -or $result.subtype -ne 'success') -and $errText -match $rateLimitRx
+
+    $brief = Get-HandoffBrief $handoff
     $lintProblems = @(Test-HandoffEntry $handoff)
-    $guardState = Join-Path $stateDir "$($sessionId ?? $result.session_id).json"
+    # B5: no valid handoff = no new top entry this session, or a new one that fails the lint. A handoff with no dated
+    # entry (session-hygiene shape) is not linted, as in the guard. Not after a usage limit (the repair would hit it
+    # too) or a DONE entry (the run ends anyway), and only with a session id to resume. At most one repair per session.
+    $repair = $null
+    $wroteEntry = $brief.exists -and ($brief.heading -ne $prevBrief.heading -or $brief.did -ne $prevBrief.did)
+    $lintFail = @($lintProblems | Where-Object { $_ -notmatch '^no top entry' })
+    if (-not $NoRepair -and $sid -and -not $rateLimited -and -not (Test-HandoffDone $brief) -and (-not $wroteEntry -or $lintFail.Count)) {
+        $trigger = if ($wroteEntry) { 'lint' } else { 'no-entry' }
+        # The repair session can trip the guard again (context is past the boundary or soft limit), which would
+        # change this session's outcome; the main session's rotate.flag, or its absence, is what counts.
+        $flagBytes = if (Test-Path -LiteralPath $flag) { [IO.File]::ReadAllBytes($flag) } else { $null }
+        $repair = Invoke-HandoffRepair $sid $trigger ($wroteEntry ? $lintFail : @()) (Join-Path $runDir "$stamp-s$n-repair.jsonl") (@($mcpArgs) + @('--add-dir', $hygieneDir) + @($briefArgs) + @($ExtraArgs))
+        if ($null -eq $flagBytes) { Remove-Item -LiteralPath $flag -ErrorAction Ignore } else { [IO.File]::WriteAllBytes($flag, $flagBytes) }
+        $before = $brief
+        $brief = Get-HandoffBrief $handoff
+        $lintProblems = @(Test-HandoffEntry $handoff)
+        $repair.entryWritten = $brief.exists -and ($brief.heading -ne $before.heading -or $brief.did -ne $before.did)
+        $repair.lintPass = $lintProblems.Count -eq 0
+        $repair.problemsAfter = $lintProblems
+        Write-LoopLog 'repair' ([ordered]@{ session = $n; sessionId = $sid } + $repair)
+        $totalCost += [double]($repair.costUsd ?? 0)
+        $totalTokens += $repair.tokens
+    }
+    if (Test-Path $handoff) { Copy-Item $handoff (Join-Path $runDir "$stamp-s$n-handoff.md") }
+    # B2: lint the handoff as this session left it; guardBlocked = the Stop guard blocked once on the lint
+    $guardState = Join-Path $stateDir "$sid.json"
     $guardBlocked = $false
     if (Test-Path -LiteralPath $guardState) {
         try { $guardBlocked = [bool](Get-Content -LiteralPath $guardState -Raw | ConvertFrom-Json).lintBlocked }
         catch { Write-Verbose "guard state unreadable: $($_.Exception.Message)" }
     }
     $handoffLint = [ordered]@{ pass = $lintProblems.Count -eq 0; problems = $lintProblems; guardBlocked = $guardBlocked }
-    $errText = if ($result) { "$($result.result) $(@($result.errors) -join ' ')" } else { '' }
-    $rateLimited = $result -and ($result.is_error -or $result.subtype -ne 'success') -and $errText -match $rateLimitRx
 
     $outcome = if ($rateLimited) { 'rate-limited' }
     elseif ($exit -ne 0 -or -not $result) { 'failed' }
     elseif (Test-HandoffDone $brief) { 'done' }
     elseif (Test-Path $flag) { 'rotated' }
     else { 'finished' }
-    # B3: the guard writes "<reason> <sessionId>" to rotate.flag; boundary = item closed above -BoundaryLimit
-    $rotateReason = $null
+    # B4: the guard writes rotate.flag as JSON {reason, sessionId, tokens, ts}; reason is soft-limit, hard-limit or
+    # boundary (B3: item closed above -BoundaryLimit). An older guard wrote "<boundary|context> <sessionId>".
+    $rotateReason = $null; $rotateTokens = $null
     if ($outcome -eq 'rotated') {
-        $flagText = ''
-        try { $flagText = "$(Get-Content -LiteralPath $flag -Raw)".Trim() }
-        catch { Write-Warning "rotate.flag unreadable, reason taken as context: $($_.Exception.Message)" }
-        $rotateReason = if ($flagText -match '^boundary\b') { 'boundary' } else { 'context' }
+        $rotateReason = 'soft-limit'
+        try {
+            $flagText = "$(Get-Content -LiteralPath $flag -Raw)".Trim()
+            if ($flagText.StartsWith('{')) {
+                $flagObj = $flagText | ConvertFrom-Json -ErrorAction Stop
+                if ($flagObj.reason -in 'soft-limit', 'hard-limit', 'boundary') { $rotateReason = $flagObj.reason }
+                else { Write-Warning "rotate.flag reason '$($flagObj.reason)' unknown, taken as soft-limit" }
+                if ($null -ne $flagObj.tokens) { $rotateTokens = [int]$flagObj.tokens }
+            }
+            elseif ($flagText -match '^boundary\b') { $rotateReason = 'boundary' }
+        }
+        catch { Write-Warning "rotate.flag unreadable, reason taken as soft-limit: $($_.Exception.Message)" }
     }
 
     $totalCost += [double]($result.total_cost_usd ?? 0)
@@ -583,7 +665,7 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
         'done' { $decision = 'handoff says DONE - stopping' }
         'rotated' {
             $consecutiveFailures = 0
-            if ($rotateReason -ne 'boundary') { $go = $true; $decision = 'context limit hit - rotating to a fresh session' }
+            if ($rotateReason -ne 'boundary') { $go = $true; $decision = "context $($rotateReason -eq 'hard-limit' ? 'hard' : 'soft') limit hit - rotating to a fresh session" }
             elseif ($blocked) { $outcome = 'blocked'; $decision = 'item closed at the boundary, but the handoff says it cannot proceed - stopping for the owner' }
             elseif ($UntilDone -and $stallCount -ge $StallSessions) { $outcome = 'stalled'; $decision = "item boundary with no progress in $stallCount sessions - stopping" }
             else { $go = $true; $decision = 'item closed above the boundary limit - rotating to a fresh session' }
@@ -609,12 +691,14 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
         durationSec  = [math]::Round(($ended - $started).TotalSeconds, 1)
         outcome      = $outcome
         rotateReason = $rotateReason
-        success      = $outcome -notin 'failed', 'rate-limited' -and $result.subtype -eq 'success' -and -not $result.is_error
+        rotateTokens = $rotateTokens
+        success     = $outcome -notin 'failed', 'rate-limited' -and $result.subtype -eq 'success' -and -not $result.is_error
         subtype      = $result.subtype
         exitCode     = $exit
-        turns        = $result.num_turns
+        turns        = if ($result) { $turnsSum } else { $null }
         costUsd      = $result.total_cost_usd
         tokens       = $tokens
+        resultEvents = $resultCount
         denials      = $denials
         rawLog       = $log
         decision     = $decision
@@ -625,6 +709,9 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
         handoffOwner = $brief.owner
         handoffSafe  = $brief.safe
         handoffLint  = $handoffLint
+        # B5: the repair line's outcome, null when no repair ran (its cost and tokens are in the loop totals, not costUsd/tokens)
+        repair       = if ($repair) { [ordered]@{ trigger = $repair.trigger; success = $repair.success; entryWritten = $repair.entryWritten
+                lintPass = $repair.lintPass; turns = $repair.turns; costUsd = $repair.costUsd; tokens = $repair.tokens; rawLog = $repair.rawLog } }
         startup      = $startup
         brief        = $briefInfo
     }
@@ -650,6 +737,11 @@ for ($n = 1; $n -le $MaxSessions; $n++) {
         Write-Host ("  {0,-9} {1}" -f 'Lint', $lintText) -ForegroundColor ($handoffLint.pass ? 'DarkGray' : 'Yellow')
     }
     else { Write-Host '  Handoff   (none found)' -ForegroundColor Yellow }
+    if ($repair) {
+        $repairText = '{0}: {1}, {2} turns, ${3:N2}' -f $repair.trigger, ($repair.entryWritten ? ($repair.lintPass ? 'entry written, lint pass' : 'entry written, lint still fails') : 'no entry written'),
+        ($repair.turns ?? '?'), [double]($repair.costUsd ?? 0)
+        Write-Host ("  {0,-9} {1}" -f 'Repair', $repairText) -ForegroundColor (($repair.entryWritten -and $repair.lintPass) ? 'DarkGray' : 'Yellow')
+    }
     $commitNote = if ($committed) { "$headBefore -> $headAfter (new commit)" } elseif ($headAfter) { "$headAfter (unchanged)" } else { 'not a git repo' }
     Write-Host ("  {0,-9} {1}" -f 'Commit', $commitNote)
     Write-Host ("  {0,-9} {1}" -f 'Startup', (Format-Startup $startup)) -ForegroundColor DarkGray
@@ -677,7 +769,7 @@ Write-LoopLog 'loop-end' ([ordered]@{
     })
 
 Write-Host "`nRun $runId - stopped: $stopReason" -ForegroundColor Cyan
-$sessions | Format-Table session, outcome, success, turns,
+$sessions | Format-Table session, outcome, @{ n = 'reason'; e = { $_.rotateReason } }, success, turns,
 @{ n = 'cost'; e = { if ($null -ne $_.costUsd) { '${0:N2}' -f $_.costUsd } } },
 @{ n = 'tokens'; e = { Format-Tokens $_.tokens } },
 durationSec, @{ n = 'denials'; e = { @($_.denials).Count } },

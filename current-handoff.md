@@ -2,6 +2,42 @@
 
 > Active operational context only. Newest entry first.
 
+## 2026-11-13 — Resume check: C1 held, release 0.2 owner gate open (C1 next)
+
+- **Did:** No code changes. Confirmed HEAD 2f564f6 with B4, B5 and X2 still uncommitted; ROADMAP.md release 0.2 still Status: active with all items checked and only the manual report smoke test left; C1 (release 0.3, planned) not started, because it would stack a fourth uncommitted item into Start-AgentLoop.ps1 and tests/Test-AgentLoop.ps1 and jump the release sequence.
+- **Verified:** pwsh -NoProfile -File tests/Test-AgentLoop.ps1: 66 scenarios, 0 failed, exit 0. Not verified: report smoke test, live Start-Agent run (owner).
+- **Progress:** Roadmap progress refreshed (no change): 14/24 items done, phases 0/0, 10 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** no; C1 is gated on Ben committing B4/B5/X2 and closing release 0.2
+- **Next:** C1: add -TestCommand/-TestTimeoutSec to Start-AgentLoop.ps1 and session.tests to the report, after release 0.2 is marked done in ROADMAP.md
+- **Owner:** Commit B4, B5 and X2 separately (git add -p); run Start-Agent -UpdateOnly; smoke-test the report on 127.0.0.1 and a live Start-Agent run; mark release 0.2 done and 0.3 active
+
+## 2026-11-13 — X2: sum turns and tokens across result events (C1 next)
+
+- **Did:** Start-AgentLoop.ps1: the session and Invoke-HandoffRepair sum num_turns and result-usage tokens across every result event and keep the last (cumulative) total_cost_usd; session line adds resultEvents. tests/Fake-Claude.ps1: extraResult step field emits an earlier result. tests/Test-AgentLoop.ps1: multi-result scenario (turns 42, tokens 453500, cost 1.78, resultEvents 2, loop-end totals, trips -MaxTokens). ROADMAP.md X2 stamped done; CLAUDE.md test counts and scenario note. durationSec was already wall-clock, so duration_ms needed no sum.
+- **Verified:** pwsh -NoProfile -File tests/Test-AgentLoop.ps1: 66 scenarios, 0 failed, exit 0; Invoke-RoadmapValidation.ps1 -FailOnError: exit 0. Not verified: a live multi-result session.
+- **Progress:** Roadmap progress appended: 14/24 items done, phases 0/0, 10 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; tests green, but B4, B5 and X2 are all uncommitted in the same files, and release 0.2 still needs its manual report smoke test
+- **Next:** C1 once Ben closes release 0.2 (see ROADMAP.md)
+- **Owner:** Review and commit B4, B5 and X2 (same files; use git add -p for separate commits); run Start-Agent -UpdateOnly; smoke-test the report on 127.0.0.1 and a live Start-Agent run, then mark release 0.2 done
+
+## 2026-11-13 — B5: handoff repair via claude -p --resume, logged as a repair line (X2 next)
+
+- **Did:** Start-AgentLoop.ps1: Invoke-HandoffRepair resumes a session once (--resume <id> --max-turns 5, fixed one-line prompt listing lint problems, same MCP/brief/extra args for a warm cache) when it wrote no new top entry or one failing Test-HandoffEntry; skipped after a usage limit, on DONE, without a session id, or with new -NoRepair (Start-Agent.ps1 passes it). Logs a repair line (trigger no-entry|lint, success, entryWritten, lintPass, cost, tokens), adds cost/tokens to loop totals and caps, re-reads handoff/lint after it, restores rotate.flag so the repair cannot change the outcome; session.repair, terminal Repair row, report Handoff repair row. tests: Fake-Claude answers --resume from step.repair without advancing; repair-noentry, repair-lint (failed call, lint still fails), repair-optout, ratelimit-stop check. CLAUDE.md, README, ROADMAP B5 stamped. Uncommitted, on top of uncommitted B4.
+- **Verified:** pwsh -NoProfile -File tests/Test-AgentLoop.ps1: 65 scenarios, 0 failed; parse check 0 errors in every *.ps1; node --check on the report script: ok; Invoke-RoadmapValidation exit 0 (R012 warns release 0.2 items are all checked). Not verified: a live --resume (does the CLI keep the session id, is the cache warm), report rendering in a browser.
+- **Progress:** Roadmap progress appended: 13/24 items done, phases 0/0, 11 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; tests green, but B4 and B5 are both uncommitted in the same files, and release 0.2 needs its manual report smoke test before it is marked done
+- **Next:** X2: sum num_turns, tokens and duration across result events in Start-AgentLoop.ps1 (ROADMAP non-blocker), or C1 once Ben closes release 0.2
+- **Owner:** Review and commit B4 and B5 (separate commits need git add -p, same files); run Start-Agent -UpdateOnly; smoke-test the report on 127.0.0.1 and a live Start-Agent run to see a real repair line, then mark release 0.2 done
+
+## 2026-11-13 — B4: rotate.flag JSON reason, logged and shown in the report (B5 next)
+
+- **Did:** context-guard.ps1: defined Write-RotateFlag (2f564f6 called it undefined, so the soft/hard limit threw and never blocked); flag is JSON {reason,sessionId,tokens,ts}, reason soft-limit|hard-limit|boundary. Start-AgentLoop.ps1: parses it (legacy plain text still read), logs rotateReason + rotateTokens, decision names soft/hard, terminal table reason column. AgentLoopReport.html: Rotation column + detail rows. tests: Fake-Claude rotate values, 2 loop + 4 guard scenarios. CLAUDE.md, README, ROADMAP B4 stamped. Uncommitted.
+- **Verified:** pwsh -NoProfile -File tests/Test-AgentLoop.ps1: 62 scenarios, 0 failed; parser check of all .ps1: 0 errors; node --check on report script: ok; Invoke-RoadmapValidation: exit 0, score 100, 2 pre-existing R011 warnings; report served on 127.0.0.1 showed boundary/soft limit/hard limit badges, no console errors. Not verified: a live Start-Agent run.
+- **Progress:** Roadmap progress appended: 12/24 items done, phases 0/0, 12 open-items left -> docs/ROADMAP-PROGRESS.md
+- **Safe to proceed:** yes; tests green, but the installed ~/.claude/agent-loop/context-guard.ps1 still has the undefined Write-RotateFlag call until synced
+- **Next:** B5: handoff repair via claude -p --resume in Start-AgentLoop.ps1 (ROADMAP Release 0.2); X2 first if repair accounting needs it
+- **Owner:** Run Start-Agent -UpdateOnly (or Install-AgentLoop.ps1 -FilesOnly) now so the installed guard stops throwing past 170k; review and commit B4; reinstall profiles and a live Start-Agent run (X3, B2)
+
 ## 2026-11-11 — X3: Start-Agent auto-updates from source (B4 next)
 
 - **Did:** New Start-Agent.ps1 (was the profile here-string); Install-AgentLoop.ps1 hash-diff copy with parse-check refusal, -FilesOnly, install.json, profile block is now an alias; 5 autoupdate-* checks in tests/Test-AgentLoop.ps1; README, CLAUDE.md, ROADMAP X3. Uncommitted.

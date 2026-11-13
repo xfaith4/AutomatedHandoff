@@ -158,10 +158,12 @@ The brief after each session prints these on a `Startup` line, and the `session`
 
 `context-guard.ps1` runs as a hook in every session:
 
-- **PostToolUse:** reads the transcript tail and adds up the last assistant turn's token usage. At 170k tokens (`-SoftLimit`) it writes `rotate.flag` and blocks with a "finish the step, write the handoff, stop" message. Past 190k tokens (`-HardLimit`) it repeats the warning on every tool call. A loop run overrides both limits through `AGENT_LOOP_SOFT_TOKENS` and `AGENT_LOOP_HARD_TOKENS`, because the hook is registered once, at user level.
+- **PostToolUse:** reads the transcript tail and adds up the last assistant turn's token usage. At 170k tokens (`-SoftLimit`) it writes `rotate.flag` and blocks with a "finish the step, write the handoff, stop" message. Past 190k tokens (`-HardLimit`) it repeats the warning on every tool call. The flag is JSON, `{reason, sessionId, tokens, ts}`, with reason `soft-limit`, `hard-limit` or `boundary`; the loop logs it as the session's `rotateReason`, and the report shows it in the session table. A loop run overrides both limits through `AGENT_LOOP_SOFT_TOKENS` and `AGENT_LOOP_HARD_TOKENS`, because the hook is registered once, at user level.
 - **Stop:** blocks the stop once if the handoff hasn't been written since the session started.
 
 The guard always exits 0 and reports its own errors on stderr, so a fault in the guard never breaks the agent.
+
+If a session still ends without a valid handoff entry (none written, or one that fails the handoff lint), the loop resumes that session once while its prompt cache is warm: `claude -p --resume <sessionId> --max-turns 5` with a fixed "write the handoff entry" prompt. The call is logged as a `repair` line, and its cost counts toward the run's totals. It never runs after a usage limit or a DONE entry. `-NoRepair` turns it off.
 
 ## Logs and report
 

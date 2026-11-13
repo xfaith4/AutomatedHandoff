@@ -63,7 +63,9 @@ $scenarios = [ordered]@{
             param($lines, $dir)
             $s = @($lines | Where-Object type -eq 'session')
             @(
-                if ($s[0].rotateReason -ne 'context') { "s1 rotateReason '$($s[0].rotateReason)', expected context" }
+                if ($s[0].rotateReason -ne 'soft-limit') { "s1 rotateReason '$($s[0].rotateReason)', expected soft-limit" }
+                if ($s[0].rotateTokens -ne 180000) { "s1 rotateTokens '$($s[0].rotateTokens)', expected 180000" }
+                if ($s[0].decision -notmatch 'soft limit') { "s1 decision does not name the soft limit: $($s[0].decision)" }
                 if ($null -ne $s[1].rotateReason) { "s2 rotateReason '$($s[1].rotateReason)' on a session that did not rotate" }
             )
         }
@@ -84,6 +86,28 @@ $scenarios = [ordered]@{
             )
         }
     }
+    # B4: the hard-limit reason reaches the session line; a pre-B4 plain-text flag still parses
+    'hardlimit-rotate'  = @{ args = @{}; steps = @(@{ label = 'A1'; rotate = 'hard-limit' }, @{ label = 'DONE'; next = 'DONE: all items closed' }); stop = 'done'; sessions = 2
+        check = {
+            param($lines, $dir)
+            $s1 = @($lines | Where-Object type -eq 'session')[0]
+            @(
+                if ($s1.rotateReason -ne 'hard-limit') { "s1 rotateReason '$($s1.rotateReason)', expected hard-limit" }
+                if ($s1.decision -notmatch 'hard limit') { "s1 decision does not name the hard limit: $($s1.decision)" }
+            )
+        }
+    }
+    'legacy-flag'       = @{ args = @{}; steps = @(@{ label = 'A1'; rotate = 'legacy-boundary' }, @{ label = 'A2'; rotate = 'legacy' }, @{ label = 'DONE'; next = 'DONE' }); stop = 'done'; sessions = 3
+        check = {
+            param($lines, $dir)
+            $s = @($lines | Where-Object type -eq 'session')
+            @(
+                if ($s[0].rotateReason -ne 'boundary') { "s1 rotateReason '$($s[0].rotateReason)', expected boundary from 'boundary <id>'" }
+                if ($s[1].rotateReason -ne 'soft-limit') { "s2 rotateReason '$($s[1].rotateReason)', expected soft-limit from an unparseable flag" }
+                if ($null -ne $s[1].rotateTokens) { "s2 rotateTokens '$($s[1].rotateTokens)', expected null" }
+            )
+        }
+    }
     'untildone-happy'   = @{ args = @{ UntilDone = $true }; steps = @(@{ label = 'A1'; commit = $true }, @{ label = 'A2'; commit = $true }, @{ label = 'DONE'; next = 'DONE: roadmap complete' }); stop = 'done'; sessions = 3 }
     'untildone-stall'   = @{ args = @{ UntilDone = $true }; steps = @(@{ label = 'A1' }, @{ label = 'A1' }, @{ label = 'A1' }, @{ label = 'A1' }); stop = 'stalled'; sessions = 3 }
     # B3: a boundary rotation ends an item, so until-done applies the same stall and blocked checks to it
@@ -96,9 +120,32 @@ $scenarios = [ordered]@{
     'untildone-owner-stop' = @{ args = @{ UntilDone = $true; StopOnOwnerItems = $true }; steps = @(@{ label = 'A1'; owner = 'Decide the fuse value'; commit = $true }, @{ label = 'DONE' }); stop = 'blocked'; sessions = 1 }
     'untildone-costcap' = @{ args = @{ UntilDone = $true; MaxCostUsd = 5 }; steps = @(@{ label = 'A1'; cost = 3; commit = $true }, @{ label = 'A2'; cost = 3; commit = $true }, @{ label = 'A3'; commit = $true }); stop = 'cost-cap'; sessions = 2 }
     'untildone-tokencap' = @{ args = @{ UntilDone = $true; MaxTokens = 100000 }; steps = @(@{ label = 'A1'; tokens = 60000; commit = $true }, @{ label = 'A2'; tokens = 60000; commit = $true }, @{ label = 'A3'; commit = $true }); stop = 'token-cap'; sessions = 2 }
+    # X2: two result events in one session; turns and tokens are summed (37+5, 400000+53500), cost is the last
+    # (cumulative) one, and the summed tokens trip -MaxTokens that the last segment alone would not
+    'multi-result'      = @{ args = @{ UntilDone = $true; MaxTokens = 300000 }
+        steps = @(@{ label = 'A1'; commit = $true; cost = 1.78; extraResult = @{ turns = 37; tokens = 400000; cost = 0.9 }; verified = 'pwsh -NoProfile -File tests/x.ps1: ok' },
+            @{ label = 'A2'; commit = $true; verified = 'pwsh -NoProfile -File tests/x.ps1: ok' })
+        stop = 'token-cap'; sessions = 1
+        check = {
+            param($lines, $dir)
+            $s = @($lines | Where-Object type -eq 'session')[0]
+            $end = @($lines | Where-Object type -eq 'loop-end')[0]
+            @(
+                if ($s.turns -ne 42) { "turns $($s.turns), expected 42 (37 + 5)" }
+                if ($s.tokens -ne 453500) { "tokens $($s.tokens), expected 453500 (400000 + 53500)" }
+                if ($s.costUsd -ne 1.78) { "costUsd $($s.costUsd), expected 1.78 (last, cumulative)" }
+                if ($s.resultEvents -ne 2) { "resultEvents $($s.resultEvents), expected 2" }
+                if ($null -ne $s.repair) { 'a repair ran on a passing entry' }
+                if ($end.totalCostUsd -ne 1.78) { "loop-end totalCostUsd $($end.totalCostUsd), expected 1.78" }
+                if ($end.totalTurns -ne 42) { "loop-end totalTurns $($end.totalTurns), expected 42" }
+            )
+        }
+    }
     'untildone-failures' = @{ args = @{ UntilDone = $true }; steps = @(@{ exit = 1 }, @{ exit = 1 }, @{ label = 'DONE' }); stop = 'failed'; sessions = 2 }
     'untildone-fail-then-ok' = @{ args = @{ UntilDone = $true }; steps = @(@{ exit = 1 }, @{ label = 'DONE'; next = 'DONE' }); stop = 'done'; sessions = 2 }
-    'ratelimit-stop'    = @{ args = @{ UntilDone = $true }; steps = @(@{ error = 'rate' }, @{ label = 'DONE' }); stop = 'rate-limited'; sessions = 1 }
+    'ratelimit-stop'    = @{ args = @{ UntilDone = $true }; steps = @(@{ error = 'rate'; repair = 'entry' }, @{ label = 'DONE' }); stop = 'rate-limited'; sessions = 1
+        check = { param($lines, $dir) @(if (@($lines | Where-Object type -eq 'repair').Count) { 'repair attempted after a usage limit (B5)' }) }
+    }
     'ratelimit-wait'    = @{ args = @{ UntilDone = $true; RateLimitWaitMinutes = 0.02 }; steps = @(@{ error = 'rate' }, @{ label = 'DONE'; next = 'DONE' }); stop = 'done'; sessions = 2 }
     'untildone-maxsessions' = @{ args = @{ UntilDone = $true; MaxSessions = 2 }; steps = @(@{ label = 'A1'; commit = $true }, @{ label = 'A2'; commit = $true }, @{ label = 'A3' }); stop = 'max-sessions'; sessions = 2 }
     # Startup defaults: no MCP servers, guard and hygiene budgets, hygiene hook on the repo handoff, metrics logged, env restored
@@ -242,6 +289,84 @@ $scenarios = [ordered]@{
             )
         }
     }
+    # B5: a session with no new entry is resumed once (same session id, --max-turns 5, the session's own brief and MCP
+    # args); the repaired entry counts for the session, its cost and tokens reach the totals, and a flag the repair
+    # writes does not turn a finished session into a rotation. The DONE session is not repaired.
+    'repair-noentry'    = @{ args = @{ UntilDone = $true }
+        steps = @(@{ noEntry = $true; repair = 'entry'; repairLabel = 'A2'; repairCost = 0.25; repairRotate = $true }, @{ label = 'DONE'; next = 'DONE: all items closed' })
+        stop = 'done'; sessions = 2
+        check = {
+            param($lines, $dir)
+            $rl = @($lines | Where-Object type -eq 'repair')
+            $s = @($lines | Where-Object type -eq 'session')
+            $end = $lines | Where-Object type -eq 'loop-end' | Select-Object -Last 1
+            $ra = @((Get-Content (Join-Path $dir '.claude/state/fake-repair-1.json') -Raw | ConvertFrom-Json).args)
+            $ca = @((Get-Content (Join-Path $dir '.claude/state/fake-call-1.json') -Raw | ConvertFrom-Json).args)
+            $at = { param($a, $k) $i = [array]::IndexOf($a, $k); if ($i -ge 0 -and $i + 1 -lt $a.Count) { $a[$i + 1] } }
+            @(
+                if ($rl.Count -ne 1) { "expected 1 repair line, got $($rl.Count)" }
+                else {
+                    $r = $rl[0]
+                    if ($r.session -ne 1 -or $r.sessionId -ne 'fake-1' -or $r.repairSessionId -ne 'fake-1') { "repair ids: session $($r.session), $($r.sessionId) -> $($r.repairSessionId)" }
+                    if ($r.trigger -ne 'no-entry') { "trigger '$($r.trigger)', expected no-entry" }
+                    if (-not $r.success -or -not $r.entryWritten -or -not $r.lintPass) { "repair result: $($r | ConvertTo-Json -Compress)" }
+                    if ($r.costUsd -ne 0.25 -or $r.tokens -ne 5000 -or $r.turns -ne 2) { "repair cost/tokens/turns $($r.costUsd)/$($r.tokens)/$($r.turns)" }
+                    if (-not (Test-Path -LiteralPath $r.rawLog) -or $r.rawLog -notmatch '-s1-repair\.jsonl$') { "repair rawLog $($r.rawLog)" }
+                }
+                if ((& $at $ra '--resume') -ne 'fake-1') { "--resume $(& $at $ra '--resume')" }
+                if ((& $at $ra '--max-turns') -ne '5') { "--max-turns $(& $at $ra '--max-turns')" }
+                if ((& $at $ra '-p') -notmatch '^HANDOFF REPAIR: .*no entry written.*Add-RunHandoffEntry\.ps1 -HandoffPath current-handoff\.md') { "repair prompt: $(& $at $ra '-p')" }
+                if ((& $at $ra '-p') -match '"') { 'repair prompt has a double quote' }
+                foreach ($k in '--append-system-prompt-file', '--mcp-config', '--permission-mode') {
+                    if ((& $at $ra $k) -ne (& $at $ca $k)) { "repair $k '$(& $at $ra $k)' differs from the session's '$(& $at $ca $k)'" }
+                }
+                if ($s[0].outcome -ne 'finished' -or $null -ne $s[0].rotateReason) { "s1 outcome $($s[0].outcome)/$($s[0].rotateReason); the repair's flag leaked" }
+                if (-not $s[0].handoffLint.pass) { "s1 handoffLint after repair: $($s[0].handoffLint | ConvertTo-Json -Compress)" }
+                if ($s[0].handoffEntry -notmatch 'repair of step 1') { "s1 handoffEntry '$($s[0].handoffEntry)'" }
+                if (-not $s[0].repair -or -not $s[0].repair.success -or $s[0].repair.trigger -ne 'no-entry') { "s1 session.repair $($s[0].repair | ConvertTo-Json -Compress)" }
+                if ($null -ne $s[1].repair) { 's2 (DONE) has a repair' }
+                if ([math]::Round($end.totalCostUsd, 2) -ne 2.25) { "totalCostUsd $($end.totalCostUsd), expected 2.25 (two sessions + repair)" }
+                if ($end.totalTokens -ne 112000) { "totalTokens $($end.totalTokens), expected 112000" }
+            )
+        }
+    }
+    # B5: a new entry that fails the lint triggers a 'lint' repair; a failed repair call (exit 1) that leaves it failing is logged as such,
+    # the rotation keeps its own reason, and a session whose entry passes is not repaired.
+    'repair-lint'       = @{ args = @{}
+        steps = @(@{ label = 'A1'; rotate = $true; repair = 'bad'; repairExit = 1 }, @{ label = 'A2'; verified = 'pwsh -NoProfile -File tests/x.ps1: ok' })
+        stop = 'finished'; sessions = 2
+        check = {
+            param($lines, $dir)
+            $rl = @($lines | Where-Object type -eq 'repair')
+            $s = @($lines | Where-Object type -eq 'session')
+            @(
+                if ($rl.Count -ne 1) { "expected 1 repair line, got $($rl.Count)" }
+                else {
+                    $r = $rl[0]
+                    if ($r.trigger -ne 'lint') { "trigger '$($r.trigger)', expected lint" }
+                    if (@($r.problemsBefore) -notcontains 'Verified names no command') { "problemsBefore $(@($r.problemsBefore) -join '; ')" }
+                    if (-not $r.entryWritten -or $r.lintPass -or @($r.problemsAfter).Count -eq 0) { "repair result: $($r | ConvertTo-Json -Compress)" }
+                    if ($r.success -or $r.exitCode -ne 1) { "failed repair call logged as success $($r.success), exit $($r.exitCode)" }
+                }
+                $ra = @((Get-Content (Join-Path $dir '.claude/state/fake-repair-1.json') -Raw | ConvertFrom-Json).args)
+                if (($ra -join ' ') -notmatch 'Verified names no command') { 'repair prompt does not list the lint problems' }
+                if ($s[0].outcome -ne 'rotated' -or $s[0].rotateReason -ne 'soft-limit') { "s1 $($s[0].outcome)/$($s[0].rotateReason)" }
+                if ($s[0].handoffLint.pass) { 's1 handoffLint passes after a bad repair' }
+                if ($null -ne $s[1].repair -or (Test-Path (Join-Path $dir '.claude/state/fake-repair-2.json'))) { 's2 passed the lint but was repaired' }
+            )
+        }
+    }
+    'repair-optout'     = @{ args = @{ NoRepair = $true }; steps = @(@{ noEntry = $true; repair = 'entry' }); stop = 'finished'; sessions = 1
+        check = {
+            param($lines, $dir)
+            @(
+                if (@($lines | Where-Object type -eq 'repair').Count) { 'repair line with -NoRepair' }
+                if (Test-Path (Join-Path $dir '.claude/state/fake-repair-1.json')) { 'claude --resume called with -NoRepair' }
+                if (($lines | Where-Object type -eq 'loop-start').repair -ne $false) { 'loop-start.repair is not false' }
+                if ($null -ne ($lines | Where-Object type -eq 'session').repair) { 'session.repair set with -NoRepair' }
+            )
+        }
+    }
 }
 
 $results = foreach ($name in $scenarios.Keys) {
@@ -282,7 +407,8 @@ $results = foreach ($name in $scenarios.Keys) {
 # blocks once on a fresh handoff that fails Test-HandoffEntry (B2). A case with `handoff` text writes that file
 # after a guard state whose startedTicks = 0, so the handoff counts as written this session (`stale` puts
 # startedTicks after the write instead). PostToolUse cases (B3) pass `tokens`, written as a one-line transcript,
-# and check rotate.flag (`flag` = regex its text must match; no `flag` = no file) and the state's boundaryWarned.
+# and check rotate.flag (`flag` = the reason its B4 JSON must carry, with sessionId guard-test and the tokens;
+# no `flag` = no file) and the state's boundaryWarned. `warned` seeds the state's soft-limit warning.
 $guard = Join-Path (Split-Path $here -Parent) 'context-guard.ps1'
 $hGood = "# T`n`n## 2026-01-02 — good (B2 next)`n`n- **Verified:** pwsh -File tests/x.ps1: ok`n- **Safe to proceed:** yes`n- **Next:** B2 in context-guard.ps1`n"
 $hBad = "# T`n`n## 2026-01-02 — bad (B2 next)`n`n- **Verified:** looked fine`n- **Safe to proceed:** probably`n- **Next:** carry on`n"
@@ -297,16 +423,21 @@ $guardCases = [ordered]@{
     'guard-lint-hygiene-shape'  = @{ runId = 'test-run'; handoff = "# Handoff: x`n`n## Status`n`ndone`n"; expectBlock = $false }
     'guard-lint-outside-loop'   = @{ runId = $null; handoff = $hBad; expectBlock = $false }
     'guard-boundary-fires'      = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; tokens = 120000; expectBlock = $true
-        reason = '^ITEM BOUNDARY: .*~120k tokens \(boundary 100k\)'; flag = '^boundary guard-test$'; expectBoundaryWarned = $true }
+        reason = '^ITEM BOUNDARY: .*~120k tokens \(boundary 100k\)'; flag = 'boundary'; expectBoundaryWarned = $true }
     'guard-boundary-under'      = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; tokens = 90000; expectBlock = $false }
     'guard-boundary-stale'      = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; stale = $true; tokens = 120000; expectBlock = $false }
     'guard-boundary-once'       = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; boundaryWarned = $true; tokens = 130000; expectBlock = $false; expectBoundaryWarned = $true }
     'guard-boundary-outside'    = @{ event = 'PostToolUse'; runId = $null; handoff = $hGood; tokens = 120000; expectBlock = $false }
     'guard-boundary-off'        = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; boundaryEnv = '0'; tokens = 120000; expectBlock = $false }
     'guard-boundary-env'        = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; boundaryEnv = '50000'; tokens = 60000; expectBlock = $true
-        reason = '\(boundary 50k\)'; flag = '^boundary '; expectBoundaryWarned = $true }
+        reason = '\(boundary 50k\)'; flag = 'boundary'; expectBoundaryWarned = $true }
     'guard-boundary-soft-wins'  = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; tokens = 175000; expectBlock = $true
-        reason = '^CONTEXT ROTATION'; flag = '^context guard-test$' }
+        reason = '^CONTEXT ROTATION'; flag = 'soft-limit' }
+    # B4: soft limit warns once but rewrites the flag on every call; past the hard limit it warns every call, reason hard-limit
+    'guard-soft-limit'          = @{ event = 'PostToolUse'; runId = 'test-run'; tokens = 175000; expectBlock = $true; reason = '^CONTEXT ROTATION: ~175k'; flag = 'soft-limit' }
+    'guard-soft-warned'         = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; warned = $true; tokens = 180000; expectBlock = $false; flag = 'soft-limit' }
+    'guard-hard-limit'          = @{ event = 'PostToolUse'; runId = 'test-run'; handoff = $hGood; warned = $true; tokens = 195000; expectBlock = $true; reason = '^CONTEXT ROTATION: ~195k'; flag = 'hard-limit' }
+    'guard-hard-outside-loop'   = @{ event = 'PostToolUse'; runId = $null; tokens = 195000; expectBlock = $true; reason = '^CONTEXT ROTATION'; flag = 'hard-limit' }
 }
 $results = @($results) + @(foreach ($name in $guardCases.Keys) {
     if ($Only -and $name -ne $Only) { continue }
@@ -319,7 +450,7 @@ $results = @($results) + @(foreach ($name in $guardCases.Keys) {
         New-Item -ItemType Directory -Force -Path (Split-Path $stateFile) | Out-Null
         [IO.File]::WriteAllText((Join-Path $dir 'current-handoff.md'), $gc.handoff)
         $started = if ($gc.stale) { [DateTime]::UtcNow.AddMinutes(5).Ticks } else { 0 }
-        @{ startedTicks = $started; warned = $false; lastTokens = 0; lintBlocked = [bool]$gc.lintBlocked; boundaryWarned = [bool]$gc.boundaryWarned } |
+        @{ startedTicks = $started; warned = [bool]$gc.warned; lastTokens = 0; lintBlocked = [bool]$gc.lintBlocked; boundaryWarned = [bool]$gc.boundaryWarned } |
             ConvertTo-Json -Compress | Set-Content $stateFile
     }
     $transcript = Join-Path $dir 'transcript.jsonl'
@@ -342,13 +473,17 @@ $results = @($results) + @(foreach ($name in $guardCases.Keys) {
     $boundaryWarned = [bool]$gstate.boundaryWarned
     $flagPath = Join-Path $dir '.claude/state/rotate.flag'
     $flagText = if (Test-Path $flagPath) { (Get-Content $flagPath -Raw).Trim() }
+    $flagObj = $null
+    if ($flagText) { try { $flagObj = $flagText | ConvertFrom-Json -ErrorAction Stop } catch { } }
     $problems = @(
         if ($blocked -ne $gc.expectBlock) { "blocked=$blocked, output: $out" }
         elseif (-not $gc.expectBlock -and $out) { "unexpected output: $out" }
         elseif ($gc.reason -and $reason -notmatch $gc.reason) { "reason did not match /$($gc.reason)/: $reason" }
         if ($lintBlocked -ne [bool]$gc.expectLintBlocked) { "state lintBlocked=$lintBlocked, expected $([bool]$gc.expectLintBlocked)" }
         if ($boundaryWarned -ne [bool]$gc.expectBoundaryWarned) { "state boundaryWarned=$boundaryWarned, expected $([bool]$gc.expectBoundaryWarned)" }
-        if ($gc.flag -and "$flagText" -notmatch $gc.flag) { "rotate.flag '$flagText' did not match /$($gc.flag)/" }
+        if ($gc.flag -and ($flagObj.reason -ne $gc.flag -or $flagObj.sessionId -ne 'guard-test' -or $flagObj.tokens -ne $gc.tokens -or -not $flagObj.ts)) {
+            "rotate.flag '$flagText' is not JSON with reason $($gc.flag), sessionId guard-test, tokens $($gc.tokens) and ts"
+        }
         elseif (-not $gc.flag -and $null -ne $flagText) { "unexpected rotate.flag '$flagText'" }
     )
     [pscustomobject]@{

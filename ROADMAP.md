@@ -132,9 +132,9 @@ _Exactly one row above should show `active`. If a second release needs to become
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
 - [x] [[B3]] Rotate at the item boundary: on `PostToolUse`, if the handoff was rewritten this session and context is above `AGENT_LOOP_BOUNDARY_TOKENS` (new `-BoundaryLimit`, default 100000), write `rotate.flag` with reason `boundary` and tell the agent to stop. *(completed: 2026-11-11)*
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
-- [ ] [[B4]] `rotate.flag` holds a JSON reason (`soft-limit`, `hard-limit`, `boundary`); the `session` line logs `rotateReason` and the report shows it in the session table. (depends: B3)
+- [x] [[B4]] `rotate.flag` holds a JSON reason (`soft-limit`, `hard-limit`, `boundary`); the `session` line logs `rotateReason` and the report shows it in the session table. (depends: B3) *(completed: 2026-11-13)*
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
-- [ ] [[B5]] Handoff repair on a warm cache: when a session ends with no valid handoff, run `claude -p --resume <sessionId>` with a fixed "write the handoff entry" prompt, `--max-turns 5`, logged as a `repair` line; at most one repair per session. (depends: B1)
+- [x] [[B5]] Handoff repair on a warm cache: when a session ends with no valid handoff, run `claude -p --resume <sessionId>` with a fixed "write the handoff entry" prompt, `--max-turns 5`, logged as a `repair` line; at most one repair per session. (depends: B1) *(completed: 2026-11-13)*
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
 
 #### Acceptance criteria
@@ -279,7 +279,7 @@ Live result: A1 with the brief reached its first edit at call 20 with 84,905 con
 
 - [ ] [[X1]] Update `README.md` and `CLAUDE.md` in the same change as each milestone that adds a parameter or log field. [non-blocker]
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
-- [ ] [[X2]] A session with more than one `result` event is logged from the last one only. `Start-AgentLoop.ps1` keeps `$result = $e`, so turns, tokens and duration come from the final segment. Seen in run 20261111-064504: a background task re-woke the session after its first result (42 turns, $1.78), and the log shows 4 turns and 446k tokens. `total_cost_usd` is cumulative, so cost is right. Sum `num_turns`, the result tokens and `duration_ms` across result events, keep the last cost, and add a Fake-Claude scenario with two results. This also matters for `-MaxTokens`. [non-blocker]
+- [x] [[X2]] A session with more than one `result` event is logged from the last one only. `Start-AgentLoop.ps1` keeps `$result = $e`, so turns, tokens and duration come from the final segment. Seen in run 20261111-064504: a background task re-woke the session after its first result (42 turns, $1.78), and the log shows 4 turns and 446k tokens. `total_cost_usd` is cumulative, so cost is right. Sum `num_turns`, the result tokens and `duration_ms` across result events, keep the last cost, and add a Fake-Claude scenario with two results. This also matters for `-MaxTokens`. [non-blocker] *(completed: 2026-11-13; turns and tokens summed, last cost kept, `session.resultEvents` added; `durationSec` was already wall-clock, so `duration_ms` needed no sum)*
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`
 - [x] [[X3]] `Start-Agent` auto-updates: the profile holds only an alias to the installed `Start-Agent.ps1`, which syncs changed runtime files from the source folder in `install.json` (`Install-AgentLoop.ps1 -FilesOnly`, refused on parse errors) and re-runs itself when replaced; `-NoUpdate`, `-UpdateOnly`. *(completed: 2026-11-11)*
       `check: pwsh -NoProfile -File tests/Test-AgentLoop.ps1`

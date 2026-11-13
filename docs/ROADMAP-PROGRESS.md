@@ -4,31 +4,34 @@
 
 ## Current position
 
-As of 2026-11-11T08:05:43-05:00, commit `afc48fd` +dirty, from `ROADMAP.md`.
+As of 2026-11-13T07:48:09-05:00, commit `2f564f6` +dirty, from `ROADMAP.md`.
 
 | Measure | Value |
 | --- | --- |
-| Items completed | 11 of 24 (45.8%) |
-| Items open | 13 |
-| Releases complete | 0 of 3 |
+| Items completed | 14 of 24 (58.3%) |
+| Items open | 10 |
+| Releases complete | 1 of 3 |
 | Phases complete | 0 of 0 |
-| Weighted work left | 13 open items (no work-unit estimates) |
+| Weighted work left | 10 open items (no work-unit estimates) |
 | Next item | Implement retry backoff in Poll-Provider.ps1 |
 
 ## Since the previous snapshot
 
-Compared with 11/11/2026 07:46:09 (commit `2b40836`):
+Compared with 11/13/2026 07:37:46 (commit `2f564f6` +dirty):
 
 - Items completed: +1
-- Items open: 0
+- Items open: -1
 - Phases completed: 0
-- Weighted work left: 0
+- Weighted work left: -1
 
 ## History
 
 | Recorded | Commit | Basis | Done | Open | Phases | Weight left | Done change |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 2026-11-11T08:05:43-05:00 | `afc48fd` +dirty | checklist | 11 | 13 | 0/0 | 13 (open-items) | +1 |
+| 2026-11-13T07:48:09-05:00 | `2f564f6` +dirty | checklist | 14 | 10 | 0/0 | 10 (open-items) | +1 |
+| 11/13/2026 07:37:46 | `2f564f6` +dirty | checklist | 13 | 11 | 0/0 | 11 (open-items) | +1 |
+| 11/13/2026 07:06:39 | `2f564f6` +dirty | checklist | 12 | 12 | 0/0 | 12 (open-items) | +1 |
+| 11/11/2026 08:05:43 | `afc48fd` +dirty | checklist | 11 | 13 | 0/0 | 13 (open-items) | +1 |
 | 11/11/2026 07:46:09 | `2b40836` | checklist | 10 | 13 | 0/0 | 13 (open-items) | +1 |
 | 11/11/2026 07:26:58 | `4940226` +dirty | checklist | 9 | 14 | 0/0 | 14 (open-items) | +1 |
 | 11/11/2026 07:16:02 | `80834cc` +dirty | checklist | 8 | 15 | 0/0 | 15 (open-items) | +1 |

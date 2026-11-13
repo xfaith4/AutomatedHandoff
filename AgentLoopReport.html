@@ -142,7 +142,7 @@
       <table id="sessions">
         <thead>
           <tr>
-            <th class="num">#</th><th>Started</th><th class="num">Duration</th><th>Outcome</th><th>Result</th>
+            <th class="num">#</th><th>Started</th><th class="num">Duration</th><th>Outcome</th><th>Rotation</th><th>Result</th>
             <th class="num">Turns</th><th class="num">Cost</th><th class="num">Denials</th><th></th>
           </tr>
         </thead>
@@ -169,9 +169,14 @@
     for (const k of kids.flat(Infinity)) if (k != null && k !== '') n.append(k instanceof Node ? k : String(k));
     return n;
   };
-  const COLS = 9;
+  const COLS = 10;
   const OUTCOME_TONE = { rotated: 'info', finished: 'ok', done: 'ok', failed: 'bad', incomplete: 'warn',
     blocked: 'warn', stalled: 'warn', 'rate-limited': 'warn' };
+  // B4: rotation reasons; 'context' is what logs from before B4 carry for the soft limit
+  const ROTATE_TEXT = { 'soft-limit': 'context soft limit', 'hard-limit': 'context hard limit (warned and kept working)',
+    boundary: 'item boundary (handoff rewritten above the boundary limit)', context: 'context limit' };
+  const ROTATE_SHORT = { 'soft-limit': 'soft limit', 'hard-limit': 'hard limit', boundary: 'boundary', context: 'context' };
+  const rotateLabel = r => ROTATE_SHORT[r] ?? String(r);
   const state = { runs: [], handoffs: [], entries: 0, skipped: 0, source: '' };
 
   const fmtTime = ts => ts ? new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' }) : '—';
@@ -419,6 +424,7 @@
           el('td', {}, fmtTime(rec.start ?? s.firstTs)),
           el('td', { class: 'num' }, fmtDur(rec.durationSec)),
           el('td', {}, badge(rec.outcome ?? 'incomplete', OUTCOME_TONE[rec.outcome ?? 'incomplete'] ?? 'warn')),
+          el('td', {}, rec.rotateReason ? badge(rotateLabel(rec.rotateReason), rec.rotateReason === 'hard-limit' ? 'warn' : 'info') : '—'),
           el('td', {}, rec.success === true ? badge('success', 'ok') : rec.success === false ? badge('fail', 'bad') : '—'),
           el('td', { class: 'num' }, rec.turns ?? '—'),
           el('td', { class: 'num' }, fmtCost(rec.costUsd)),
@@ -449,6 +455,15 @@
     return l.guardBlocked ? `${text} (Stop guard blocked once)` : text;
   }
 
+  // B5: rec.repair = { trigger, success, entryWritten, lintPass, turns, costUsd, tokens, rawLog }; null when no repair ran.
+  function repairText(r) {
+    if (!r || typeof r !== 'object') return null;
+    const what = r.entryWritten ? (r.lintPass ? 'entry written, lint pass' : 'entry written, lint still fails') : 'no entry written';
+    const facts = [r.turns != null ? `${r.turns} turns` : null, typeof r.costUsd === 'number' ? `$${r.costUsd.toFixed(2)}` : null,
+      typeof r.tokens === 'number' ? fmtTok(r.tokens) : null].filter(Boolean);
+    return `${r.trigger ?? '?'}: ${what}${r.success ? '' : ' (call failed)'}${facts.length ? ` (${facts.join(', ')})` : ''}`;
+  }
+
   function detailBody(s) {
     const rec = s.record ?? {};
     const meta = [
@@ -456,11 +471,13 @@
       ['Exit code', rec.exitCode], ['Ended', rec.end && fmtTime(rec.end)], ['Raw stream log', rec.rawLog],
       ['Tokens', typeof rec.tokens === 'number' ? rec.tokens.toLocaleString() : null], ['Startup', startupText(rec.startup)],
       ['Session brief', briefLink(rec.brief)], ['Loop decision', rec.decision],
-      // B3: rotateReason = 'boundary' (item closed above -BoundaryLimit) or 'context' (soft limit); null unless rotated
-      ['Rotation reason', rec.rotateReason === 'boundary' ? 'item boundary (handoff rewritten above the boundary limit)' : rec.rotateReason === 'context' ? 'context limit' : null],
+      // B4: rotateReason = soft-limit | hard-limit | boundary (B3); 'context' in logs from before B4; null unless rotated
+      ['Rotation reason', rec.rotateReason ? ROTATE_TEXT[rec.rotateReason] ?? String(rec.rotateReason) : null],
+      ['Tokens at rotation', rec.rotateTokens != null ? fmtTok(rec.rotateTokens) : null],
       ['Commit', rec.headBefore && rec.headAfter ? (rec.headBefore === rec.headAfter ? `${rec.headAfter} (unchanged)` : `${rec.headBefore} → ${rec.headAfter}`) : null],
       ['Handoff entry', rec.handoffEntry], ['Handoff next', rec.handoffNext], ['Handoff owner', rec.handoffOwner], ['Safe to proceed', rec.handoffSafe],
-      ['Handoff lint', lintText(rec.handoffLint)]
+      ['Handoff lint', lintText(rec.handoffLint)], ['Handoff repair', repairText(rec.repair)],
+      ['Repair stream log', rec.repair?.rawLog]
     ].filter(([, v]) => v != null && v !== '');
     return [
       meta.length ? el('dl', { class: 'meta' }, meta.map(([k, v]) => [el('dt', {}, k), el('dd', {}, v instanceof Node ? v : String(v))])) : null,

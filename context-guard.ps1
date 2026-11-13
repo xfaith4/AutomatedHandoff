@@ -13,6 +13,7 @@
                B3: inside a loop run, once the handoff was rewritten this session and context is at or above
                BoundaryLimit (below SoftLimit), it writes rotate.flag ("boundary") once and tells Claude to stop,
                so the next roadmap item starts in a fresh session instead of on top of the last one's context.
+               B4: rotate.flag is JSON {reason, sessionId, tokens, ts}, reason soft-limit | hard-limit | boundary.
   Stop:        blocks the stop once if current-handoff.md wasn't written this session, and once more
                if the written top entry fails Test-HandoffEntry (B2). Only inside a loop run (AGENT_LOOP_RUN_ID set by Start-AgentLoop.ps1): the hook is
                registered at user level, so it also fires in interactive sessions, which it must not block.
@@ -67,6 +68,12 @@ try {
         return 0
     }
 
+    # B4: rotate.flag is one JSON object; reason is soft-limit, hard-limit or boundary. The loop reads it.
+    function Write-RotateFlag([string]$Reason, [int]$Tokens) {
+        [ordered]@{ reason = $Reason; sessionId = $payload.session_id; tokens = $Tokens; ts = [DateTime]::UtcNow.ToString('o') } |
+            ConvertTo-Json -Compress | Set-Content -LiteralPath $flag
+    }
+
     $handoffFresh = (Test-Path $handoff) -and
     ((Get-Item $handoff).LastWriteTimeUtc.Ticks -gt [long]$state.startedTicks)
     $out = $null
@@ -97,7 +104,7 @@ try {
                 -not $state.boundaryWarned) {
                 # B3: the handoff was rewritten this session, so an item just closed. Starting the next one on top of
                 # this context costs more per call than a fresh session that reads the handoff. Once per session.
-                Set-Content -Path $flag -Value "boundary $($payload.session_id)"
+                Write-RotateFlag 'boundary' $tokens
                 $state | Add-Member -NotePropertyName boundaryWarned -NotePropertyValue $true -Force
                 $k = [math]::Round($tokens / 1000)
                 $out = @{

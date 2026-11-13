@@ -33,6 +33,7 @@ param(
     [switch]$KeepHygieneInjection, # let the session-hygiene hook inject its own handoff too
     [switch]$NoBrief,            # skip the pre-session brief (for a no-brief comparison run)
     [int]$BriefMaxChars = 4000,  # cap on the pre-session brief
+    [switch]$NoRepair,           # B5: no claude -p --resume call when a session leaves no valid handoff
     [switch]$NoUpdate,           # skip the sync from the source folder
     [switch]$UpdateOnly          # sync from the source folder, then stop
 )
@@ -95,7 +96,7 @@ $loopArgs = @{
     ProjectDir = $path; MaxSessions = $Max; PermissionMode = $Mode; Prompt = $Prompt; ExtraArgs = $args2
     UntilDone = $UntilDone; MaxCostUsd = $MaxCost; MaxTokens = $MaxTokens; RateLimitWaitMinutes = $RateLimitWait
     SoftLimit = $SoftLimit; HardLimit = $HardLimit; BoundaryLimit = $BoundaryLimit; KeepMcp = $KeepMcp; KeepHygieneInjection = $KeepHygieneInjection
-    NoBrief = $NoBrief; BriefMaxChars = $BriefMaxChars
+    NoBrief = $NoBrief; BriefMaxChars = $BriefMaxChars; NoRepair = $NoRepair
 }
 if ($McpConfig) { $loopArgs.McpConfig = (Resolve-Path $McpConfig -ErrorAction Stop).Path }
 & (Join-Path $PSScriptRoot 'Start-AgentLoop.ps1') @loopArgs
